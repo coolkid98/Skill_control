@@ -114,9 +114,34 @@ export function initDb(options = {}) {
   db.pragma('busy_timeout = 5000');
   db.exec(SCHEMA);
   db.prepare('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(1, Date.now());
+  applyMigrations();
   bootstrapAdmin(options.bootstrapAdmin || config.bootstrapAdmin);
   seedSkills(options.seedDir || config.seedDir);
   return db;
+}
+
+function applyMigrations() {
+  const migrations = [
+    {
+      version: 2,
+      run() {
+        db.prepare(`
+          UPDATE skill_versions
+          SET summary = '初始版本'
+          WHERE version_no = 1
+            AND status = 'APPROVED'
+            AND summary = '从 credit_model 当前工作区导入的初始版本'
+        `).run();
+      },
+    },
+  ];
+  const apply = db.transaction((migration) => {
+    const exists = db.prepare('SELECT 1 FROM schema_migrations WHERE version = ?').get(migration.version);
+    if (exists) return;
+    migration.run();
+    db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(migration.version, Date.now());
+  });
+  for (const migration of migrations) apply(migration);
 }
 
 export function closeDb() {
@@ -161,7 +186,7 @@ function seedSkills(seedDir) {
       db.prepare(`
         INSERT INTO skill_versions(id, skill_id, version_no, status, change_type, summary, revision, created_by, created_at, submitted_at, reviewed_at)
         VALUES (?, ?, 1, 'APPROVED', 'CREATE', ?, 0, ?, ?, ?, ?)
-      `).run(versionId, skillId, '从 credit_model 当前工作区导入的初始版本', admin?.id || null, now, now, now);
+      `).run(versionId, skillId, '初始版本', admin?.id || null, now, now, now);
       insertVersionFiles(versionId, files);
       auditLog({ actorId: admin?.id, action: 'SEED_SKILL', targetType: 'SKILL_VERSION', targetId: versionId, metadata: { slug, version: 1 } });
     }

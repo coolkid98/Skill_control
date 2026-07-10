@@ -14,13 +14,15 @@ import { validateFiles, ValidationError } from '../src/validation.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const seedDir = path.resolve(__dirname, '../seed/skills');
 let tempDir;
+let dbPath;
 let app;
 
 beforeEach(() => {
   closeDb();
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-control-test-'));
+  dbPath = path.join(tempDir, 'test.db');
   initDb({
-    dbPath: path.join(tempDir, 'test.db'),
+    dbPath,
     seedDir,
     bootstrapAdmin: { username: 'admin', password: 'AdminPass123', displayName: '测试管理员' },
   });
@@ -71,8 +73,22 @@ describe('初始化与校验', () => {
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM skill_versions').get().count, 3);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM version_files').get().count, 7);
     assert.deepEqual(db.prepare('SELECT DISTINCT version_no FROM skill_versions').all(), [{ version_no: 1 }]);
+    assert.deepEqual(db.prepare('SELECT DISTINCT summary FROM skill_versions').all(), [{ summary: '初始版本' }]);
     const current = db.prepare("SELECT content FROM version_files WHERE path = 'SKILL.md' AND content LIKE '%customer-prescreen%' LIMIT 1").get();
     assert.match(current.content, /通用双轨制链式推理引擎/);
+  });
+
+  test('旧数据库启动时自动把初始版本说明迁移为简短文案', () => {
+    getDb().prepare("UPDATE skill_versions SET summary = '从 credit_model 当前工作区导入的初始版本' WHERE version_no = 1").run();
+    getDb().prepare('DELETE FROM schema_migrations WHERE version = 2').run();
+    closeDb();
+    initDb({
+      dbPath,
+      seedDir,
+      bootstrapAdmin: { username: 'admin', password: 'AdminPass123', displayName: '测试管理员' },
+    });
+    assert.deepEqual(getDb().prepare('SELECT DISTINCT summary FROM skill_versions').all(), [{ summary: '初始版本' }]);
+    assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 2').get().count, 1);
   });
 
   test('阻止路径穿越、缺失 SKILL.md 和不匹配的 frontmatter', () => {

@@ -1,0 +1,29 @@
+{
+  "name": "skill-control-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon --watch src --watch seed --exec 'node --env-file=../.env' src/index.js",
+    "start": "node --env-file=../.env src/index.js",
+    "test": "NODE_ENV=test node --test --test-concurrency=1 test/*.test.js"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "bcryptjs": "^3.0.2",
+    "better-sqlite3": "^12.2.0",
+    "cookie-parser": "^1.4.7",
+    "diff": "^8.0.2",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.0.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "js-yaml": "^4.1.0",
+    "nanoid": "^5.1.5"
+  },
+  "devDependencies": {
+    "adm-zip": "^0.5.16",
+    "nodemon": "^3.1.10",
+    "supertest": "^7.1.4"
+  }
+}

@@ -57,7 +57,7 @@ BOOTSTRAP_ADMIN_DISPLAY_NAME=系统管理员
 COOKIE_SECURE=false
 ```
 
-`BOOTSTRAP_ADMIN_*` 只在数据库没有管理员时使用。首次登录后必须修改密码。
+`BOOTSTRAP_ADMIN_*` 只在数据库没有管理员时使用。首次登录后必须修改密码。直接通过 `http://IP:端口` 访问时保持 `COOKIE_SECURE=false`；只有配置 HTTPS 反向代理后才改为 `true`。
 
 ### 2. 构建启动
 

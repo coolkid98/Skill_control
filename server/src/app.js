@@ -16,7 +16,12 @@ export function createApp() {
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
   app.use(helmet({
-    contentSecurityPolicy: config.isProduction ? undefined : false,
+    contentSecurityPolicy: config.isProduction ? {
+      directives: {
+        upgradeInsecureRequests: config.cookieSecure ? [] : null,
+      },
+    } : false,
+    strictTransportSecurity: config.cookieSecure ? undefined : false,
   }));
   app.use(express.json({ limit: '6mb' }));
   app.use(cookieParser());

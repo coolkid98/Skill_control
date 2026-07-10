@@ -70,7 +70,7 @@ docker compose logs -f
 
 默认访问 `http://ECS公网IP:3002`。在阿里云安全组开放配置的 `APP_PORT`。若使用域名和 HTTPS，请由 Nginx/Caddy 反向代理至该端口，并将 `COOKIE_SECURE=true`；反向代理必须传递 `X-Forwarded-For` 和 `X-Forwarded-Proto`。
 
-国内构建使用 DaoCloud Node 基础镜像和 npmmirror npm 源，与参考项目的部署方式一致。
+国内构建使用 DaoCloud Node 基础镜像、阿里云 Debian 软件源和 npmmirror npm 源，与参考项目的部署方式一致。
 `better-sqlite3` 在独立的 Docker 构建阶段安装 Python、make 和 g++ 完成原生编译；最终运行镜像只复制编译产物，不包含这些编译工具。
 
 ## 数据持久化与备份

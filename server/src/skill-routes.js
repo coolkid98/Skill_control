@@ -299,7 +299,7 @@ skillRouter.get('/versions', requireAuth, (req, res) => {
 skillRouter.get('/releases', requireAuth, (req, res, next) => {
   try {
     const requestedReleaseTime = req.query.releaseTime
-      ? validateReleaseTime(req.query.releaseTime)
+      ? validateReleaseTime(req.query.releaseTime, { fridayOnly: false })
       : null;
     let sql = `${VERSION_SELECT} WHERE v.status = 'APPROVED' AND v.release_time IS NOT NULL`;
     const params = [];
@@ -404,7 +404,7 @@ skillRouter.get('/exports/current.zip', requireAuth, (req, res, next) => {
 
 skillRouter.get('/exports/releases/:releaseTime.zip', requireAuth, (req, res, next) => {
   try {
-    const releaseTime = validateReleaseTime(req.params.releaseTime);
+    const releaseTime = validateReleaseTime(req.params.releaseTime, { fridayOnly: false });
     const rows = getDb().prepare(`${VERSION_SELECT}
       WHERE v.status = 'APPROVED' AND v.release_time = ?
         AND NOT EXISTS (

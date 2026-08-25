@@ -33,7 +33,7 @@ export function validateSlug(slug) {
   }
 }
 
-export function validateReleaseTime(value, { required = true } = {}) {
+export function validateReleaseTime(value, { required = true, fridayOnly = true } = {}) {
   const releaseTime = String(value || '').trim();
   if (!releaseTime) {
     if (required) throw new ValidationError('请选择投产日期');
@@ -45,6 +45,9 @@ export function validateReleaseTime(value, { required = true } = {}) {
   const date = new Date(Date.UTC(year, month - 1, day));
   if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
     throw new ValidationError('投产日期不是有效日期');
+  }
+  if (fridayOnly && date.getUTCDay() !== 5) {
+    throw new ValidationError('投产日期只能选择星期五');
   }
   return releaseTime;
 }

@@ -9,7 +9,7 @@ import AdmZip from 'adm-zip';
 import request from 'supertest';
 import { closeDb, getDb, initDb } from '../src/db.js';
 import { createApp } from '../src/app.js';
-import { validateFiles, ValidationError } from '../src/validation.js';
+import { validateFiles, validateReleaseTime, ValidationError } from '../src/validation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const seedDir = path.resolve(__dirname, '../seed/skills');
@@ -112,6 +112,27 @@ describe('初始化与校验', () => {
     assert.throws(() => validateFiles([{ path: 'SKILL.md', content: '---\nname: wrong\ndescription: x\n---\n' }], 'safe-skill', { strict: true }), /校验失败/);
     assert.doesNotThrow(() => validateFiles([{ path: 'SKILL.md', content: '---\nname: safe-skill\ndescription: 合法描述\ntool-calls: read queryData\n---\n' }], 'safe-skill', { strict: true }));
   });
+
+  test('投产日期只接受有效的星期五', () => {
+    assert.equal(validateReleaseTime('2026-08-28'), '2026-08-28');
+    assert.equal(validateReleaseTime('2026-09-04'), '2026-09-04');
+    assert.throws(() => validateReleaseTime('2026-08-29'), /星期五/);
+    assert.throws(() => validateReleaseTime('2026-02-30'), /有效日期/);
+    assert.equal(validateReleaseTime('2026-08-25', { fridayOnly: false }), '2026-08-25');
+  });
+
+  test('旧数据库启动时自动创建密码重置申请表', () => {
+    getDb().exec('DROP TABLE password_reset_requests');
+    getDb().prepare('DELETE FROM schema_migrations WHERE version = 4').run();
+    closeDb();
+    initDb({
+      dbPath,
+      seedDir,
+      bootstrapAdmin: { username: 'admin', password: 'AdminPass123', displayName: '测试管理员' },
+    });
+    assert.ok(getDb().prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'password_reset_requests'").get());
+    assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 4').get().count, 1);
+  });
 });
 
 describe('认证与权限', () => {
@@ -150,6 +171,30 @@ describe('认证与权限', () => {
     assert.equal(secondChange.status, 200, secondChange.text);
     const thirdSession = await login('repeat-password', 'ThirdPass123');
     assert.equal((await thirdSession.get('/api/auth/me')).status, 200);
+  });
+
+  test('忘记密码申请不暴露账号状态，管理员重置后申请自动完成', async () => {
+    const userId = createUser('forgot-user', 'EDITOR');
+    const existing = await request(app).post('/api/auth/forgot-password').send({ username: 'forgot-user' });
+    const missing = await request(app).post('/api/auth/forgot-password').send({ username: 'does-not-exist' });
+    assert.equal(existing.status, 202);
+    assert.equal(missing.status, 202);
+    assert.equal(existing.body.message, missing.body.message);
+    await request(app).post('/api/auth/forgot-password').send({ username: 'forgot-user' });
+    assert.equal(getDb().prepare("SELECT COUNT(*) AS count FROM password_reset_requests WHERE user_id = ? AND status = 'PENDING'").get(userId).count, 1);
+
+    const admin = await login('admin', 'AdminPass123');
+    const pending = await admin.get('/api/admin/password-reset-requests');
+    assert.equal(pending.status, 200, pending.text);
+    assert.equal(pending.body.requests.length, 1);
+    assert.equal(pending.body.requests[0].username, 'forgot-user');
+
+    const reset = await admin.post(`/api/admin/users/${userId}/reset-password`).send({ temporaryPassword: 'ResetPass123' });
+    assert.equal(reset.status, 204, reset.text);
+    assert.equal(getDb().prepare("SELECT COUNT(*) AS count FROM password_reset_requests WHERE user_id = ? AND status = 'PENDING'").get(userId).count, 0);
+    const relogin = await request.agent(app).post('/api/auth/login').send({ username: 'forgot-user', password: 'ResetPass123' });
+    assert.equal(relogin.status, 200);
+    assert.equal(relogin.body.user.mustChangePassword, true);
   });
 });
 
@@ -202,27 +247,67 @@ describe('版本审批工作流', () => {
     assert.match(missingDate.body.error, /投产日期/);
     await editor.delete(`/api/drafts/${draft.id}`);
 
-    const submitted = await createSubmittedVersion(editor, '九月投产批次', '2026-09-26');
+    const submitted = await createSubmittedVersion(editor, '九月投产批次', '2026-09-25');
     // 模拟升级前已提交、尚无投产日期的存量待审版本，由审核者在批准时补齐。
     getDb().prepare('UPDATE skill_versions SET release_time = NULL WHERE id = ?').run(submitted.id);
-    const approved = await reviewer.post(`/api/versions/${submitted.id}/review`).send({ decision: 'APPROVE', comment: '纳入九月批次', releaseTime: '2026-09-26' });
+    const approved = await reviewer.post(`/api/versions/${submitted.id}/review`).send({ decision: 'APPROVE', comment: '纳入九月批次', releaseTime: '2026-09-25' });
     assert.equal(approved.status, 200, approved.text);
 
     const releases = await reviewer.get('/api/releases');
     assert.equal(releases.status, 200, releases.text);
-    const group = releases.body.groups.find((item) => item.releaseTime === '2026-09-26');
+    const group = releases.body.groups.find((item) => item.releaseTime === '2026-09-25');
     assert.ok(group);
     assert.equal(group.versions.some((version) => version.id === submitted.id), true);
 
-    const exported = await reviewer.get('/api/exports/releases/2026-09-26.zip').buffer(true).parse((res, callback) => {
+    const exported = await reviewer.get('/api/exports/releases/2026-09-25.zip').buffer(true).parse((res, callback) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => callback(null, Buffer.concat(chunks)));
     });
     assert.equal(exported.status, 200, exported.text);
     const manifest = JSON.parse(new AdmZip(exported.body).readAsText('manifest.json'));
-    assert.equal(manifest.releaseTime, '2026-09-26');
+    assert.equal(manifest.releaseTime, '2026-09-25');
     assert.deepEqual(manifest.skills.map((skill) => skill.slug), ['customer-prescreen']);
+  });
+
+  test('管理员可调整任意已批准版本的投产日期并记录审计', async () => {
+    createUser('not-admin', 'EDITOR');
+    const editor = await login('not-admin');
+    const admin = await login('admin', 'AdminPass123');
+    const version = getDb().prepare("SELECT id FROM skill_versions WHERE status = 'APPROVED' ORDER BY created_at LIMIT 1").get();
+
+    const denied = await editor.patch(`/api/admin/versions/${version.id}/release-time`).send({ releaseTime: '2026-08-28' });
+    assert.equal(denied.status, 403);
+    const wrongDay = await admin.patch(`/api/admin/versions/${version.id}/release-time`).send({ releaseTime: '2026-08-29' });
+    assert.equal(wrongDay.status, 400);
+    assert.match(wrongDay.body.error, /星期五/);
+
+    const updated = await admin.patch(`/api/admin/versions/${version.id}/release-time`).send({ releaseTime: '2026-08-28' });
+    assert.equal(updated.status, 200, updated.text);
+    assert.equal(updated.body.version.releaseTime, '2026-08-28');
+    assert.equal(getDb().prepare('SELECT release_time FROM skill_versions WHERE id = ?').get(version.id).release_time, '2026-08-28');
+    const audit = getDb().prepare("SELECT metadata FROM audit_logs WHERE action = 'UPDATE_RELEASE_TIME' AND target_id = ?").get(version.id);
+    assert.equal(JSON.parse(audit.metadata).releaseTime, '2026-08-28');
+
+    const legacyGroup = getDb().prepare("SELECT release_time, COUNT(*) AS count FROM skill_versions WHERE status = 'APPROVED' AND id != ? GROUP BY release_time ORDER BY count DESC LIMIT 1").get(version.id);
+    const batch = await admin.patch(`/api/admin/releases/${legacyGroup.release_time}`).send({ releaseTime: '2026-09-04' });
+    assert.equal(batch.status, 200, batch.text);
+    assert.equal(batch.body.updatedCount, legacyGroup.count);
+    assert.equal(getDb().prepare("SELECT COUNT(*) AS count FROM skill_versions WHERE status = 'APPROVED' AND release_time = '2026-09-04'").get().count, legacyGroup.count);
+    assert.ok(getDb().prepare("SELECT id FROM audit_logs WHERE action = 'UPDATE_RELEASE_BATCH' AND target_id = ?").get(legacyGroup.release_time));
+  });
+
+  test('非周五日期不能保存或提交', async () => {
+    createUser('friday-editor', 'EDITOR');
+    const editor = await login('friday-editor');
+    const draftResponse = await editor.post('/api/skills/customer-prescreen/drafts').send({});
+    const draft = (await editor.get(`/api/drafts/${draftResponse.body.draftId}`)).body.version;
+    const files = draft.files.map(({ path: filePath, content }) => ({ path: filePath, content }));
+    const saved = await editor.patch(`/api/drafts/${draft.id}`).send({ revision: draft.revision, files, summary: '错误日期', releaseTime: '2026-08-29' });
+    assert.equal(saved.status, 400);
+    assert.match(saved.body.error, /星期五/);
+    const submitted = await editor.post(`/api/drafts/${draft.id}/submit`).send({ revision: draft.revision, summary: '错误日期', releaseTime: '2026-08-29' });
+    assert.equal(submitted.status, 400);
   });
 
   test('驳回必须有原因，驳回版本不能原地修改', async () => {

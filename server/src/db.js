@@ -81,6 +81,17 @@ CREATE TABLE IF NOT EXISTS reviews (
   FOREIGN KEY (reviewer_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS password_reset_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'RESOLVED')),
+  requested_at INTEGER NOT NULL,
+  resolved_by INTEGER,
+  resolved_at INTEGER,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (resolved_by) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   actor_id INTEGER,
@@ -97,6 +108,8 @@ CREATE INDEX IF NOT EXISTS idx_versions_skill_created ON skill_versions(skill_id
 CREATE INDEX IF NOT EXISTS idx_versions_status ON skill_versions(status, submitted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+CREATE INDEX IF NOT EXISTS idx_password_reset_status ON password_reset_requests(status, requested_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_password_reset_pending_user ON password_reset_requests(user_id) WHERE status = 'PENDING';
 `;
 
 export function getDb() {
@@ -150,6 +163,25 @@ function applyMigrations() {
         const update = db.prepare('UPDATE skill_versions SET release_time = ? WHERE id = ?');
         for (const row of approved) update.run(releaseDateInChina(row.occurred_at), row.id);
         db.exec('CREATE INDEX IF NOT EXISTS idx_versions_release_time ON skill_versions(release_time DESC, status)');
+      },
+    },
+    {
+      version: 4,
+      run() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS password_reset_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'RESOLVED')),
+            requested_at INTEGER NOT NULL,
+            resolved_by INTEGER,
+            resolved_at INTEGER,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (resolved_by) REFERENCES users(id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_password_reset_status ON password_reset_requests(status, requested_at DESC);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_password_reset_pending_user ON password_reset_requests(user_id) WHERE status = 'PENDING';
+        `);
       },
     },
   ];

@@ -4,6 +4,7 @@ import { ROLES, USER_STATUSES } from './constants.js';
 import { auditLog, getDb } from './db.js';
 import { requireRole, publicUser } from './auth.js';
 import { getClientIp } from './http.js';
+import { validateReleaseTime } from './validation.js';
 
 export const adminRouter = express.Router();
 adminRouter.use(...requireRole(ROLES.ADMIN));
@@ -11,6 +12,26 @@ adminRouter.use(...requireRole(ROLES.ADMIN));
 adminRouter.get('/users', (req, res) => {
   const users = getDb().prepare('SELECT * FROM users ORDER BY created_at DESC').all().map(publicUser);
   res.json({ users });
+});
+
+adminRouter.get('/password-reset-requests', (req, res) => {
+  const requests = getDb().prepare(`
+    SELECT p.id, p.user_id, p.requested_at,
+           u.username, u.display_name, u.role, u.status AS user_status
+    FROM password_reset_requests p
+    JOIN users u ON u.id = p.user_id
+    WHERE p.status = 'PENDING'
+    ORDER BY p.requested_at ASC
+  `).all().map((row) => ({
+    id: row.id,
+    userId: row.user_id,
+    username: row.username,
+    displayName: row.display_name,
+    role: row.role,
+    userStatus: row.user_status,
+    requestedAt: row.requested_at,
+  }));
+  res.json({ requests });
 });
 
 adminRouter.post('/users', (req, res) => {
@@ -66,10 +87,72 @@ adminRouter.post('/users/:id/reset-password', (req, res) => {
     return res.status(400).json({ error: '临时密码至少 10 位，且必须同时包含字母和数字' });
   }
   const now = Date.now();
-  getDb().prepare('UPDATE users SET password_hash = ?, must_change_password = 1, updated_at = ? WHERE id = ?')
-    .run(bcrypt.hashSync(temporaryPassword, 10), now, id);
-  auditLog({ actorId: req.user.id, action: 'RESET_PASSWORD', targetType: 'USER', targetId: String(id), ip: getClientIp(req) });
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1, updated_at = ? WHERE id = ?')
+      .run(bcrypt.hashSync(temporaryPassword, 10), now, id);
+    db.prepare(`
+      UPDATE password_reset_requests
+      SET status = 'RESOLVED', resolved_by = ?, resolved_at = ?
+      WHERE user_id = ? AND status = 'PENDING'
+    `).run(req.user.id, now, id);
+    auditLog({ actorId: req.user.id, action: 'RESET_PASSWORD', targetType: 'USER', targetId: String(id), ip: getClientIp(req) });
+  })();
   return res.status(204).end();
+});
+
+adminRouter.patch('/versions/:id/release-time', (req, res) => {
+  const releaseTime = validateReleaseTime(req.body?.releaseTime);
+  const db = getDb();
+  const version = db.prepare(`
+    SELECT v.id, v.status, v.release_time, v.version_no, s.slug
+    FROM skill_versions v JOIN skills s ON s.id = v.skill_id
+    WHERE v.id = ?
+  `).get(req.params.id);
+  if (!version) return res.status(404).json({ error: '版本不存在' });
+  if (version.status !== 'APPROVED') return res.status(409).json({ error: '只能调整已批准版本的投产日期' });
+  if (version.release_time === releaseTime) return res.json({ version: { id: version.id, releaseTime } });
+  db.prepare('UPDATE skill_versions SET release_time = ? WHERE id = ?').run(releaseTime, version.id);
+  auditLog({
+    actorId: req.user.id,
+    action: 'UPDATE_RELEASE_TIME',
+    targetType: 'SKILL_VERSION',
+    targetId: version.id,
+    metadata: { slug: version.slug, versionNo: version.version_no, previousReleaseTime: version.release_time, releaseTime },
+    ip: getClientIp(req),
+  });
+  return res.json({ version: { id: version.id, releaseTime } });
+});
+
+adminRouter.patch('/releases/:releaseTime', (req, res) => {
+  const previousReleaseTime = validateReleaseTime(req.params.releaseTime, { fridayOnly: false });
+  const releaseTime = validateReleaseTime(req.body?.releaseTime);
+  const db = getDb();
+  const versions = db.prepare(`
+    SELECT v.id, v.version_no, s.slug
+    FROM skill_versions v JOIN skills s ON s.id = v.skill_id
+    WHERE v.status = 'APPROVED' AND v.release_time = ?
+  `).all(previousReleaseTime);
+  if (!versions.length) return res.status(404).json({ error: '原投产日期下没有已批准版本' });
+  if (previousReleaseTime === releaseTime) return res.json({ updatedCount: 0, releaseTime });
+  db.transaction(() => {
+    db.prepare("UPDATE skill_versions SET release_time = ? WHERE status = 'APPROVED' AND release_time = ?")
+      .run(releaseTime, previousReleaseTime);
+    auditLog({
+      actorId: req.user.id,
+      action: 'UPDATE_RELEASE_BATCH',
+      targetType: 'RELEASE',
+      targetId: previousReleaseTime,
+      metadata: {
+        previousReleaseTime,
+        releaseTime,
+        updatedCount: versions.length,
+        versions: versions.map((version) => `${version.slug}@v${version.version_no}`),
+      },
+      ip: getClientIp(req),
+    });
+  })();
+  return res.json({ updatedCount: versions.length, releaseTime });
 });
 
 adminRouter.get('/audit-logs', (req, res) => {

@@ -18,6 +18,15 @@ const loginLimiter = rateLimit({
   message: { error: '登录尝试过于频繁，请稍后再试' },
 });
 
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
+  message: { error: '密码重置申请过于频繁，请稍后再试' },
+});
+
 function publicUser(row) {
   return {
     id: row.id,
@@ -55,6 +64,23 @@ authRouter.post('/login', loginLimiter, (req, res) => {
   return res.json({ user: publicUser(row) });
 });
 
+authRouter.post('/forgot-password', forgotPasswordLimiter, (req, res) => {
+  const username = String(req.body?.username || '').trim();
+  const user = /^[A-Za-z0-9_.-]{2,40}$/.test(username)
+    ? getDb().prepare("SELECT id FROM users WHERE username = ? COLLATE NOCASE AND status = 'ACTIVE'").get(username)
+    : null;
+  if (user) {
+    const result = getDb().prepare(`
+      INSERT OR IGNORE INTO password_reset_requests(user_id, status, requested_at)
+      VALUES (?, 'PENDING', ?)
+    `).run(user.id, Date.now());
+    if (result.changes) {
+      auditLog({ actorId: null, action: 'REQUEST_PASSWORD_RESET', targetType: 'USER', targetId: String(user.id), ip: getClientIp(req) });
+    }
+  }
+  return res.status(202).json({ message: '如果账号存在且处于启用状态，管理员会收到密码重置申请。请联系管理员获取临时密码。' });
+});
+
 authRouter.post('/logout', optionalAuth, (req, res) => {
   res.clearCookie(COOKIE_NAME, { path: '/' });
   if (req.user) auditLog({ actorId: req.user.id, action: 'LOGOUT', targetType: 'SESSION', ip: getClientIp(req) });
@@ -77,9 +103,17 @@ authRouter.post('/change-password', requireAuth, (req, res) => {
   if (currentPassword === newPassword) return res.status(400).json({ error: '新密码不能与当前密码相同' });
   const now = Date.now();
   const hash = bcrypt.hashSync(newPassword, 10);
-  getDb().prepare('UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?')
-    .run(hash, now, req.user.id);
-  auditLog({ actorId: req.user.id, action: 'CHANGE_PASSWORD', targetType: 'USER', targetId: String(req.user.id), ip: getClientIp(req) });
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?')
+      .run(hash, now, req.user.id);
+    db.prepare(`
+      UPDATE password_reset_requests
+      SET status = 'RESOLVED', resolved_by = ?, resolved_at = ?
+      WHERE user_id = ? AND status = 'PENDING'
+    `).run(req.user.id, now, req.user.id);
+    auditLog({ actorId: req.user.id, action: 'CHANGE_PASSWORD', targetType: 'USER', targetId: String(req.user.id), ip: getClientIp(req) });
+  })();
   res.clearCookie(COOKIE_NAME, { path: '/' });
   return res.json({ message: '密码已修改，请重新登录' });
 });

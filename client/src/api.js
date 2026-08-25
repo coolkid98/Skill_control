@@ -37,6 +37,17 @@ export function formatReleaseDate(value) {
   return match ? `${match[1]}年${match[2]}月${match[3]}日` : String(value);
 }
 
+export function isFridayReleaseDate(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const [, year, month, day] = match.map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day
+    && date.getUTCDay() === 5;
+}
+
 export const statusLabel = {
   DRAFT: '草稿',
   SUBMITTED: '待审核',

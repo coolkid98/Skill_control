@@ -410,16 +410,22 @@ skillRouter.get('/releases', requireAuth, (req, res, next) => {
       sql += ' AND v.release_time = ?';
       params.push(requestedReleaseTime);
     }
-    sql += ' ORDER BY v.release_time DESC, v.reviewed_at DESC, s.slug';
+    sql += ' ORDER BY v.release_time DESC, s.slug, v.version_no DESC, v.reviewed_at DESC';
     const versions = getDb().prepare(sql).all(...params).map((row) => mapVersion(row));
     const groups = [];
     for (const version of versions) {
       let group = groups.at(-1);
       if (!group || group.releaseTime !== version.releaseTime) {
-        group = { releaseTime: version.releaseTime, versions: [] };
+        group = { releaseTime: version.releaseTime, versions: [], skills: [] };
         groups.push(group);
       }
       group.versions.push(version);
+      let skill = group.skills.at(-1);
+      if (!skill || skill.skillId !== version.skillId) {
+        skill = { skillId: version.skillId, slug: version.slug, versions: [] };
+        group.skills.push(skill);
+      }
+      skill.versions.push(version);
     }
     res.json({ groups });
   } catch (error) { next(error); }

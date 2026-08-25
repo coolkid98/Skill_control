@@ -248,6 +248,14 @@ td select { width: 110px; height: 32px; font-size: 11px; }
 .release-groups { display: grid; gap: 20px; }
 .release-group { overflow: hidden; }
 .release-date-label { display: block; margin-bottom: 4px; color: #079382; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+.release-skill-list { padding: 3px 0; }
+.release-skill-group { border-top: 1px solid #e7ebef; }
+.release-skill-group:first-child { border-top: 0; }
+.release-skill-heading { display: flex; align-items: center; gap: 10px; padding: 13px 23px 8px; background: #fbfcfc; }
+.release-skill-heading .skill-glyph { flex: none; }
+.release-skill-heading > a:not(.skill-glyph) { color: #253044; }
+.release-skill-heading > a:not(.skill-glyph):hover { color: var(--primary-dark); }
+.release-skill-heading > span { margin-left: auto; color: #8992a0; font-size: 11px; }
 .release-version-list { padding: 3px 0; }
 .release-version-row { display: grid; grid-template-columns: auto minmax(230px, 1fr) 150px 180px; align-items: center; gap: 15px; padding: 15px 23px; border-bottom: 1px solid #edf0f3; transition: .15s; }
 .release-version-row.admin-row, .release-version-row.request-row { grid-template-columns: auto minmax(230px, 1fr) 150px 180px auto; }

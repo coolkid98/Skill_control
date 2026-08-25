@@ -51,10 +51,10 @@ async function login(username, password = 'UserPass123') {
   return agent;
 }
 
-async function createSubmittedVersion(editorAgent, suffix = '新增审核规则', releaseTime = '2026-09-18') {
-  const skillResponse = await editorAgent.get('/api/skills/customer-prescreen');
+async function createSubmittedVersion(editorAgent, suffix = '新增审核规则', releaseTime = '2026-09-18', slug = 'customer-prescreen') {
+  const skillResponse = await editorAgent.get(`/api/skills/${slug}`);
   assert.equal(skillResponse.status, 200);
-  const draftResponse = await editorAgent.post('/api/skills/customer-prescreen/drafts').send({});
+  const draftResponse = await editorAgent.post(`/api/skills/${slug}/drafts`).send({});
   assert.equal(draftResponse.status, 201, draftResponse.text);
   const draftId = draftResponse.body.draftId;
   const draft = (await editorAgent.get(`/api/drafts/${draftId}`)).body.version;
@@ -289,12 +289,17 @@ describe('版本审批工作流', () => {
     getDb().prepare('UPDATE skill_versions SET release_time = NULL WHERE id = ?').run(submitted.id);
     const approved = await reviewer.post(`/api/versions/${submitted.id}/review`).send({ decision: 'APPROVE', comment: '纳入九月批次', releaseTime: '2026-09-25' });
     assert.equal(approved.status, 200, approved.text);
+    const sameWindow = await createSubmittedVersion(editor, '同日金融分析变更', '2026-09-25', 'financial-statement-analysis');
+    const sameWindowApproved = await reviewer.post(`/api/versions/${sameWindow.id}/review`).send({ decision: 'APPROVE', comment: '同日纳入批次' });
+    assert.equal(sameWindowApproved.status, 200, sameWindowApproved.text);
 
     const releases = await reviewer.get('/api/releases');
     assert.equal(releases.status, 200, releases.text);
     const group = releases.body.groups.find((item) => item.releaseTime === '2026-09-25');
     assert.ok(group);
     assert.equal(group.versions.some((version) => version.id === submitted.id), true);
+    assert.deepEqual(group.skills.map((skill) => skill.slug), ['customer-prescreen', 'financial-statement-analysis']);
+    assert.equal(group.skills.find((skill) => skill.slug === 'financial-statement-analysis').versions[0].id, sameWindow.id);
 
     const exported = await reviewer.get('/api/exports/releases/2026-09-25.zip').buffer(true).parse((res, callback) => {
       const chunks = [];
@@ -304,7 +309,7 @@ describe('版本审批工作流', () => {
     assert.equal(exported.status, 200, exported.text);
     const manifest = JSON.parse(new AdmZip(exported.body).readAsText('manifest.json'));
     assert.equal(manifest.releaseTime, '2026-09-25');
-    assert.deepEqual(manifest.skills.map((skill) => skill.slug), ['customer-prescreen']);
+    assert.deepEqual(manifest.skills.map((skill) => skill.slug), ['customer-prescreen', 'financial-statement-analysis']);
   });
 
   test('管理员可调整任意已批准版本的投产日期并记录审计', async () => {

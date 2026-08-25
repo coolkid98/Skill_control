@@ -34,6 +34,33 @@ adminRouter.get('/password-reset-requests', (req, res) => {
   res.json({ requests });
 });
 
+adminRouter.get('/release-time-change-requests', (req, res) => {
+  const requests = getDb().prepare(`
+    SELECT c.*, v.version_no, v.status AS version_status, v.release_time AS current_release_time,
+           s.slug, requester.username AS requester_username,
+           requester.display_name AS requester_name
+    FROM release_time_change_requests c
+    JOIN skill_versions v ON v.id = c.version_id
+    JOIN skills s ON s.id = v.skill_id
+    JOIN users requester ON requester.id = c.requested_by
+    WHERE c.status = 'PENDING'
+    ORDER BY c.created_at ASC
+  `).all().map((row) => ({
+    id: row.id,
+    versionId: row.version_id,
+    slug: row.slug,
+    versionNo: row.version_no,
+    versionStatus: row.version_status,
+    currentReleaseTime: row.current_release_time,
+    previousReleaseTime: row.previous_release_time,
+    requestedReleaseTime: row.requested_release_time,
+    reason: row.reason,
+    requesterName: row.requester_name || row.requester_username,
+    createdAt: row.created_at,
+  }));
+  res.json({ requests });
+});
+
 adminRouter.post('/users', (req, res) => {
   const username = String(req.body?.username || '').trim();
   const displayName = String(req.body?.displayName || '').trim();
@@ -112,15 +139,19 @@ adminRouter.patch('/versions/:id/release-time', (req, res) => {
   if (!version) return res.status(404).json({ error: '版本不存在' });
   if (version.status !== 'APPROVED') return res.status(409).json({ error: '只能调整已批准版本的投产日期' });
   if (version.release_time === releaseTime) return res.json({ version: { id: version.id, releaseTime } });
-  db.prepare('UPDATE skill_versions SET release_time = ? WHERE id = ?').run(releaseTime, version.id);
-  auditLog({
-    actorId: req.user.id,
-    action: 'UPDATE_RELEASE_TIME',
-    targetType: 'SKILL_VERSION',
-    targetId: version.id,
-    metadata: { slug: version.slug, versionNo: version.version_no, previousReleaseTime: version.release_time, releaseTime },
-    ip: getClientIp(req),
-  });
+  const now = Date.now();
+  db.transaction(() => {
+    db.prepare('UPDATE skill_versions SET release_time = ? WHERE id = ?').run(releaseTime, version.id);
+    const supersededRequests = rejectPendingReleaseTimeRequests(db, [version.id], req.user.id, now, '管理员已直接调整该版本的投产日期');
+    auditLog({
+      actorId: req.user.id,
+      action: 'UPDATE_RELEASE_TIME',
+      targetType: 'SKILL_VERSION',
+      targetId: version.id,
+      metadata: { slug: version.slug, versionNo: version.version_no, previousReleaseTime: version.release_time, releaseTime, supersededRequests },
+      ip: getClientIp(req),
+    });
+  })();
   return res.json({ version: { id: version.id, releaseTime } });
 });
 
@@ -135,9 +166,11 @@ adminRouter.patch('/releases/:releaseTime', (req, res) => {
   `).all(previousReleaseTime);
   if (!versions.length) return res.status(404).json({ error: '原投产日期下没有已批准版本' });
   if (previousReleaseTime === releaseTime) return res.json({ updatedCount: 0, releaseTime });
+  const now = Date.now();
   db.transaction(() => {
     db.prepare("UPDATE skill_versions SET release_time = ? WHERE status = 'APPROVED' AND release_time = ?")
       .run(releaseTime, previousReleaseTime);
+    const supersededRequests = rejectPendingReleaseTimeRequests(db, versions.map((version) => version.id), req.user.id, now, '管理员已直接调整该投产批次');
     auditLog({
       actorId: req.user.id,
       action: 'UPDATE_RELEASE_BATCH',
@@ -148,12 +181,86 @@ adminRouter.patch('/releases/:releaseTime', (req, res) => {
         releaseTime,
         updatedCount: versions.length,
         versions: versions.map((version) => `${version.slug}@v${version.version_no}`),
+        supersededRequests,
       },
       ip: getClientIp(req),
     });
   })();
   return res.json({ updatedCount: versions.length, releaseTime });
 });
+
+adminRouter.post('/release-time-change-requests/:id/review', (req, res) => {
+  const decision = String(req.body?.decision || '');
+  const comment = String(req.body?.comment || '').trim();
+  if (!['APPROVE', 'REJECT'].includes(decision)) return res.status(400).json({ error: '审批决定不合法' });
+  if (decision === 'REJECT' && comment.length < 2) return res.status(400).json({ error: '驳回时必须填写原因' });
+  if (comment.length > 1000) return res.status(400).json({ error: '审批意见不能超过 1000 个字符' });
+  const db = getDb();
+  const outcome = db.transaction(() => {
+    const request = db.prepare(`
+      SELECT c.*, v.status AS version_status, v.release_time AS current_release_time,
+             v.version_no, s.slug
+      FROM release_time_change_requests c
+      JOIN skill_versions v ON v.id = c.version_id
+      JOIN skills s ON s.id = v.skill_id
+      WHERE c.id = ?
+    `).get(Number(req.params.id));
+    if (!request) return { notFound: true };
+    if (request.status !== 'PENDING') return { conflict: true };
+    const now = Date.now();
+    if (decision === 'APPROVE' && (request.version_status !== 'APPROVED' || request.current_release_time !== request.previous_release_time)) {
+      db.prepare(`
+        UPDATE release_time_change_requests
+        SET status = 'REJECTED', reviewed_by = ?, review_comment = ?, reviewed_at = ?
+        WHERE id = ? AND status = 'PENDING'
+      `).run(req.user.id, '版本状态或投产日期已变化，原申请自动失效', now, request.id);
+      auditLog({ actorId: req.user.id, action: 'REJECT_STALE_RELEASE_TIME_CHANGE', targetType: 'RELEASE_TIME_CHANGE_REQUEST', targetId: String(request.id), metadata: { versionId: request.version_id, slug: request.slug }, ip: getClientIp(req) });
+      return { stale: true };
+    }
+    if (decision === 'APPROVE') {
+      const releaseTime = validateReleaseTime(request.requested_release_time);
+      db.prepare('UPDATE skill_versions SET release_time = ? WHERE id = ?').run(releaseTime, request.version_id);
+    }
+    const nowStatus = decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+    db.prepare(`
+      UPDATE release_time_change_requests
+      SET status = ?, reviewed_by = ?, review_comment = ?, reviewed_at = ?
+      WHERE id = ? AND status = 'PENDING'
+    `).run(nowStatus, req.user.id, comment || null, now, request.id);
+    auditLog({
+      actorId: req.user.id,
+      action: decision === 'APPROVE' ? 'APPROVE_RELEASE_TIME_CHANGE' : 'REJECT_RELEASE_TIME_CHANGE',
+      targetType: 'RELEASE_TIME_CHANGE_REQUEST',
+      targetId: String(request.id),
+      metadata: {
+        versionId: request.version_id,
+        slug: request.slug,
+        versionNo: request.version_no,
+        previousReleaseTime: request.previous_release_time,
+        requestedReleaseTime: request.requested_release_time,
+        comment,
+      },
+      ip: getClientIp(req),
+    });
+    return { status: nowStatus, releaseTime: decision === 'APPROVE' ? request.requested_release_time : request.current_release_time };
+  })();
+  if (outcome.notFound) return res.status(404).json({ error: '改期申请不存在' });
+  if (outcome.conflict) return res.status(409).json({ error: '该改期申请已经处理' });
+  if (outcome.stale) return res.status(409).json({ error: '版本状态或投产日期已变化，原申请已自动驳回', code: 'STALE_RELEASE_TIME_CHANGE' });
+  return res.json({ request: { id: Number(req.params.id), status: outcome.status, releaseTime: outcome.releaseTime } });
+});
+
+function rejectPendingReleaseTimeRequests(db, versionIds, reviewerId, reviewedAt, comment) {
+  if (!versionIds.length) return 0;
+  const reject = db.prepare(`
+    UPDATE release_time_change_requests
+    SET status = 'REJECTED', reviewed_by = ?, review_comment = ?, reviewed_at = ?
+    WHERE version_id = ? AND status = 'PENDING'
+  `);
+  let count = 0;
+  for (const versionId of versionIds) count += reject.run(reviewerId, comment, reviewedAt, versionId).changes;
+  return count;
+}
 
 adminRouter.get('/audit-logs', (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);

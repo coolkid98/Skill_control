@@ -246,6 +246,30 @@ describe('版本审批工作流', () => {
     assert.equal(manifest.skills.length, 3);
   });
 
+  test('Skill 管理和工作台只返回最近三个投产窗口', async () => {
+    createUser('window-editor', 'EDITOR');
+    createUser('window-reviewer', 'REVIEWER');
+    const editor = await login('window-editor');
+    const reviewer = await login('window-reviewer');
+    const releaseTimes = ['2026-09-04', '2026-09-11', '2026-09-18'];
+    for (const [index, releaseTime] of releaseTimes.entries()) {
+      const submitted = await createSubmittedVersion(editor, `窗口 ${index + 1} 变更`, releaseTime);
+      const approved = await reviewer.post(`/api/versions/${submitted.id}/review`).send({ decision: 'APPROVE', comment: '窗口测试' });
+      assert.equal(approved.status, 200, approved.text);
+    }
+
+    const skills = await editor.get('/api/skills');
+    assert.equal(skills.status, 200, skills.text);
+    const skill = skills.body.skills.find((item) => item.slug === 'customer-prescreen');
+    assert.deepEqual(skill.recentReleaseVersions.map((version) => version.releaseTime), ['2026-09-18', '2026-09-11', '2026-09-04']);
+    assert.equal(skill.recentReleaseVersions.length, 3);
+
+    const dashboard = await editor.get('/api/dashboard');
+    assert.equal(dashboard.status, 200, dashboard.text);
+    assert.deepEqual(dashboard.body.recentGroups.map((group) => group.releaseTime), ['2026-09-18', '2026-09-11', '2026-09-04']);
+    assert.equal(dashboard.body.recentGroups.length, 3);
+  });
+
   test('投产日期提交时必填，批准后按日期分组并可独立导出', async () => {
     createUser('releaseeditor', 'EDITOR');
     createUser('releasereviewer', 'REVIEWER');

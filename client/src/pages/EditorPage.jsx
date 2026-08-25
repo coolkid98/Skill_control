@@ -14,6 +14,7 @@ export default function EditorPage() {
   const [files, setFiles] = useState([]);
   const [selected, setSelected] = useState('SKILL.md');
   const [summary, setSummary] = useState('');
+  const [releaseTime, setReleaseTime] = useState('');
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -22,7 +23,7 @@ export default function EditorPage() {
 
   useEffect(() => {
     api(`/drafts/${id}`).then(({ version: value }) => {
-      setVersion(value); setFiles(value.files); setSummary(value.summary || ''); setSelected(value.files[0]?.path || 'SKILL.md');
+      setVersion(value); setFiles(value.files); setSummary(value.summary || ''); setReleaseTime(value.releaseTime || ''); setSelected(value.files[0]?.path || 'SKILL.md');
     }).catch((err) => setError(err.message));
   }, [id]);
   useEffect(() => {
@@ -56,7 +57,7 @@ export default function EditorPage() {
   async function save() {
     setBusy(true); setError(''); setMessage('');
     try {
-      const data = await api(`/drafts/${id}`, { method: 'PATCH', body: { revision: version.revision, files: files.map(({ path, content }) => ({ path, content })), summary } });
+      const data = await api(`/drafts/${id}`, { method: 'PATCH', body: { revision: version.revision, files: files.map(({ path, content }) => ({ path, content })), summary, releaseTime } });
       setVersion(data.version); setFiles(data.version.files); setDirty(false); setMessage('草稿已保存');
       return data.version;
     } catch (err) { setError(err.message); throw err; }
@@ -64,11 +65,12 @@ export default function EditorPage() {
   }
   async function submit() {
     if (!summary.trim()) return setError('提交审核前请填写变更说明');
+    if (!releaseTime) return setError('提交审核前请选择投产日期');
     if (!window.confirm('提交后快照不可再修改，确认提交审核？')) return;
     setBusy(true); setError('');
     try {
       const saved = await save();
-      const data = await api(`/drafts/${id}/submit`, { method: 'POST', body: { revision: saved.revision, summary } });
+      const data = await api(`/drafts/${id}/submit`, { method: 'POST', body: { revision: saved.revision, summary, releaseTime } });
       setDirty(false); navigate(`/versions/${data.version.id}`);
     } catch (err) { setError(err.message); }
     finally { setBusy(false); }
@@ -78,5 +80,5 @@ export default function EditorPage() {
     await api(`/drafts/${id}`, { method: 'DELETE' }); setDirty(false); navigate(`/skills/${version.slug}`);
   }
 
-  return <div className="editor-page"><header className="editor-header"><div><Link to={`/skills/${version.slug}`}>← {version.slug}</Link><span className="editor-separator">/</span><strong>{version.changeType === 'ROLLBACK' ? '回滚草稿' : '编辑草稿'}</strong>{dirty && <span className="unsaved">未保存</span>}</div><div className="editor-actions"><button className="button ghost danger-text" onClick={discard}>丢弃</button><button className="button secondary" disabled={busy || !dirty} onClick={save}>{busy ? '处理中…' : '保存草稿'}</button><button className="button primary" disabled={busy} onClick={submit}>提交审核</button></div></header>{version.stale && <Notice type="warning">该草稿基于旧发布版，保存不受影响，但提交前必须从最新版本重新创建草稿。</Notice>}{error && <div className="form-error editor-message">{error}</div>}{message && <div className="form-success editor-message">{message}</div>}<div className="editor-workspace"><aside className="file-tree"><div className="tree-heading"><span>文件</span><button onClick={addFile} title="新增文件">＋</button></div>{files.map((file) => <button key={file.path} className={selected === file.path ? 'active' : ''} onClick={() => setSelected(file.path)}><span>▧</span>{file.path}</button>)}<div className="file-tree-bottom"><button disabled={selected === 'SKILL.md'} onClick={deleteFile}>删除当前文件</button></div></aside><section className="code-pane"><div className="pane-bar"><span>{selected}</span><button onClick={() => setPreview(!preview)}>{preview ? '隐藏预览' : '显示预览'}</button></div><CodeMirror value={current?.content || ''} height="calc(100vh - 225px)" extensions={extensions} onChange={updateContent} basicSetup={{ lineNumbers: true, foldGutter: true }} /></section>{preview && <section className="preview-pane"><div className="pane-bar"><span>Markdown 预览</span></div><article className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{current?.content || ''}</ReactMarkdown></article></section>}</div><footer className="editor-footer"><label>变更说明 <span>提交审核时必填</span><textarea value={summary} onChange={(e) => { setSummary(e.target.value); setDirty(true); }} maxLength={500} placeholder="说明本次修改的业务背景、规则变化和影响范围…" /></label><small>{summary.length}/500</small></footer></div>;
+  return <div className="editor-page"><header className="editor-header"><div><Link to={`/skills/${version.slug}`}>← {version.slug}</Link><span className="editor-separator">/</span><strong>{version.changeType === 'ROLLBACK' ? '回滚草稿' : '编辑草稿'}</strong>{dirty && <span className="unsaved">未保存</span>}</div><div className="editor-actions"><button className="button ghost danger-text" onClick={discard}>丢弃</button><button className="button secondary" disabled={busy || !dirty} onClick={save}>{busy ? '处理中…' : '保存草稿'}</button><button className="button primary" disabled={busy} onClick={submit}>提交审核</button></div></header>{version.stale && <Notice type="warning">该草稿基于旧发布版，保存不受影响，但提交前必须从最新版本重新创建草稿。</Notice>}{error && <div className="form-error editor-message">{error}</div>}{message && <div className="form-success editor-message">{message}</div>}<div className="editor-workspace"><aside className="file-tree"><div className="tree-heading"><span>文件</span><button onClick={addFile} title="新增文件">＋</button></div>{files.map((file) => <button key={file.path} className={selected === file.path ? 'active' : ''} onClick={() => setSelected(file.path)}><span>▧</span>{file.path}</button>)}<div className="file-tree-bottom"><button disabled={selected === 'SKILL.md'} onClick={deleteFile}>删除当前文件</button></div></aside><section className="code-pane"><div className="pane-bar"><span>{selected}</span><button onClick={() => setPreview(!preview)}>{preview ? '隐藏预览' : '显示预览'}</button></div><CodeMirror value={current?.content || ''} height="calc(100vh - 225px)" extensions={extensions} onChange={updateContent} basicSetup={{ lineNumbers: true, foldGutter: true }} /></section>{preview && <section className="preview-pane"><div className="pane-bar"><span>Markdown 预览</span></div><article className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{current?.content || ''}</ReactMarkdown></article></section>}</div><footer className="editor-footer"><label className="editor-release-field">投产日期 <span>提交审核时必填</span><input type="date" value={releaseTime} onChange={(e) => { setReleaseTime(e.target.value); setDirty(true); setMessage(''); }} required /></label><label>变更说明 <span>提交审核时必填</span><textarea value={summary} onChange={(e) => { setSummary(e.target.value); setDirty(true); }} maxLength={500} placeholder="说明本次修改的业务背景、规则变化和影响范围…" /></label><small>{summary.length}/500</small></footer></div>;
 }

@@ -38,6 +38,7 @@ export function Layout() {
         <nav onClick={() => setOpen(false)}>
           <NavItem to="/" icon="◫" label="工作台" end />
           <NavItem to="/skills" icon="◇" label="Skill 管理" />
+          <NavItem to="/releases" icon="▦" label="投产管理" />
           {user.role === 'REVIEWER' && <NavItem to="/reviews" icon="✓" label="审批待办" />}
           {user.role === 'ADMIN' && <NavItem to="/users" icon="♙" label="用户管理" />}
           {user.role === 'ADMIN' && <NavItem to="/audit" icon="≡" label="审计日志" />}
@@ -47,6 +48,7 @@ export function Layout() {
           <div className="user-card">
             <span className="avatar">{user.displayName.slice(0, 1)}</span>
             <div><strong>{user.displayName}</strong><small>{roleLabel[user.role]}</small></div>
+            <button className="icon-button" onClick={() => navigate('/change-password')} title="修改密码">⌁</button>
             <button className="icon-button" onClick={doLogout} title="退出登录">↪</button>
           </div>
         </div>

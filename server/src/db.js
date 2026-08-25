@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS skill_versions (
   source_version_id TEXT,
   base_published_version_id TEXT,
   summary TEXT,
+  release_time TEXT,
   revision INTEGER NOT NULL DEFAULT 0,
   created_by INTEGER,
   created_at INTEGER NOT NULL,
@@ -134,6 +135,23 @@ function applyMigrations() {
         `).run();
       },
     },
+    {
+      version: 3,
+      run() {
+        const columns = db.prepare('PRAGMA table_info(skill_versions)').all();
+        if (!columns.some((column) => column.name === 'release_time')) {
+          db.exec('ALTER TABLE skill_versions ADD COLUMN release_time TEXT');
+        }
+        const approved = db.prepare(`
+          SELECT id, COALESCE(reviewed_at, submitted_at, created_at) AS occurred_at
+          FROM skill_versions
+          WHERE status = 'APPROVED' AND release_time IS NULL
+        `).all();
+        const update = db.prepare('UPDATE skill_versions SET release_time = ? WHERE id = ?');
+        for (const row of approved) update.run(releaseDateInChina(row.occurred_at), row.id);
+        db.exec('CREATE INDEX IF NOT EXISTS idx_versions_release_time ON skill_versions(release_time DESC, status)');
+      },
+    },
   ];
   const apply = db.transaction((migration) => {
     const exists = db.prepare('SELECT 1 FROM schema_migrations WHERE version = ?').get(migration.version);
@@ -184,14 +202,25 @@ function seedSkills(seedDir) {
       db.prepare('INSERT INTO skills(id, slug, current_published_version_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)')
         .run(skillId, slug, versionId, admin?.id || null, now);
       db.prepare(`
-        INSERT INTO skill_versions(id, skill_id, version_no, status, change_type, summary, revision, created_by, created_at, submitted_at, reviewed_at)
-        VALUES (?, ?, 1, 'APPROVED', 'CREATE', ?, 0, ?, ?, ?, ?)
-      `).run(versionId, skillId, '初始版本', admin?.id || null, now, now, now);
+        INSERT INTO skill_versions(id, skill_id, version_no, status, change_type, summary, release_time, revision, created_by, created_at, submitted_at, reviewed_at)
+        VALUES (?, ?, 1, 'APPROVED', 'CREATE', ?, ?, 0, ?, ?, ?, ?)
+      `).run(versionId, skillId, '初始版本', releaseDateInChina(now), admin?.id || null, now, now, now);
       insertVersionFiles(versionId, files);
       auditLog({ actorId: admin?.id, action: 'SEED_SKILL', targetType: 'SKILL_VERSION', targetId: versionId, metadata: { slug, version: 1 } });
     }
   });
   run();
+}
+
+function releaseDateInChina(timestamp) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(timestamp));
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
 }
 
 function readMarkdownTree(root, current = '') {

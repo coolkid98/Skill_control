@@ -33,6 +33,22 @@ export function validateSlug(slug) {
   }
 }
 
+export function validateReleaseTime(value, { required = true } = {}) {
+  const releaseTime = String(value || '').trim();
+  if (!releaseTime) {
+    if (required) throw new ValidationError('请选择投产日期');
+    return null;
+  }
+  const match = releaseTime.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new ValidationError('投产日期格式必须为 YYYY-MM-DD');
+  const [, year, month, day] = match.map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    throw new ValidationError('投产日期不是有效日期');
+  }
+  return releaseTime;
+}
+
 export function validateFiles(files, slug, { strict = false } = {}) {
   const errors = [];
   if (!Array.isArray(files)) throw new ValidationError('文件列表格式不正确');

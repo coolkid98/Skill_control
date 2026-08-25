@@ -13,6 +13,7 @@ import { getClientIp, httpError } from './http.js';
 import {
   computeSnapshotHash,
   validateFiles,
+  validateReleaseTime,
   validateSlug,
 } from './validation.js';
 
@@ -37,6 +38,7 @@ function mapVersion(row, includeFiles = false) {
     sourceVersionId: row.source_version_id,
     basePublishedVersionId: row.base_published_version_id,
     summary: row.summary,
+    releaseTime: row.release_time,
     revision: row.revision,
     createdBy: row.created_by,
     creatorName: row.creator_name || row.creator_username,
@@ -101,6 +103,7 @@ skillRouter.get('/skills', requireAuth, (req, res) => {
   const rows = getDb().prepare(`
     SELECT s.id, s.slug, s.current_published_version_id, s.created_at,
            pub.version_no AS current_version_no, pub.reviewed_at AS published_at,
+           pub.release_time,
            (SELECT COUNT(*) FROM skill_versions p WHERE p.skill_id = s.id AND p.status = 'SUBMITTED') AS pending_count,
            (SELECT id FROM skill_versions d WHERE d.skill_id = s.id AND d.status = 'DRAFT' AND d.created_by = ? ORDER BY d.created_at DESC LIMIT 1) AS my_draft_id,
            (SELECT content FROM version_files f WHERE f.version_id = s.current_published_version_id AND f.path = 'SKILL.md') AS skill_content
@@ -114,6 +117,7 @@ skillRouter.get('/skills', requireAuth, (req, res) => {
     currentPublishedVersionId: row.current_published_version_id,
     currentVersionNo: row.current_version_no,
     publishedAt: row.published_at,
+    releaseTime: row.release_time,
     pendingCount: row.pending_count,
     myDraftId: row.my_draft_id,
     description: extractDescription(row.skill_content),
@@ -145,7 +149,8 @@ skillRouter.post('/skills', ...requireRole(ROLES.EDITOR), (req, res) => {
 
 skillRouter.get('/skills/:slug', requireAuth, (req, res) => {
   const skill = getDb().prepare(`
-    SELECT s.*, pub.version_no AS current_version_no, pub.reviewed_at AS published_at
+    SELECT s.*, pub.version_no AS current_version_no, pub.reviewed_at AS published_at,
+           pub.release_time
     FROM skills s LEFT JOIN skill_versions pub ON pub.id = s.current_published_version_id
     WHERE s.slug = ? COLLATE NOCASE
   `).get(req.params.slug);
@@ -162,6 +167,7 @@ skillRouter.get('/skills/:slug', requireAuth, (req, res) => {
       currentPublishedVersionId: skill.current_published_version_id,
       currentVersionNo: skill.current_version_no,
       publishedAt: skill.published_at,
+      releaseTime: skill.release_time,
       description: extractDescription(currentFiles.find((file) => file.path === 'SKILL.md')?.content),
     },
     currentFiles,
@@ -217,9 +223,12 @@ skillRouter.patch('/drafts/:id', ...requireRole(ROLES.EDITOR), (req, res, next) 
     const files = req.body?.files;
     validateFiles(files, row.slug, { strict: false });
     const summary = req.body?.summary == null ? row.summary : String(req.body.summary).slice(0, 500);
+    const releaseTime = req.body?.releaseTime === undefined
+      ? row.release_time
+      : validateReleaseTime(req.body.releaseTime, { required: false });
     const result = db.transaction(() => {
-      const changed = db.prepare("UPDATE skill_versions SET summary = ?, revision = revision + 1 WHERE id = ? AND status = 'DRAFT' AND revision = ?")
-        .run(summary, row.id, expectedRevision);
+      const changed = db.prepare("UPDATE skill_versions SET summary = ?, release_time = ?, revision = revision + 1 WHERE id = ? AND status = 'DRAFT' AND revision = ?")
+        .run(summary, releaseTime, row.id, expectedRevision);
       if (changed.changes !== 1) return false;
       db.prepare('DELETE FROM version_files WHERE version_id = ?').run(row.id);
       insertVersionFiles(row.id, files);
@@ -256,6 +265,7 @@ skillRouter.post('/drafts/:id/submit', ...requireRole(ROLES.EDITOR), (req, res, 
     if (expectedRevision !== row.revision) return res.status(409).json({ error: '请先保存最新草稿再提交' });
     const summary = String(req.body?.summary || row.summary || '').trim();
     if (summary.length < 2 || summary.length > 500) return res.status(400).json({ error: '请填写 2-500 字的变更说明' });
+    const releaseTime = validateReleaseTime(req.body?.releaseTime ?? row.release_time);
     const files = filesForVersion(row.id);
     validateFiles(files, row.slug, { strict: true });
     const outcome = db.transaction(() => {
@@ -264,10 +274,10 @@ skillRouter.post('/drafts/:id/submit', ...requireRole(ROLES.EDITOR), (req, res, 
       const versionNo = db.prepare('SELECT COALESCE(MAX(version_no), 0) + 1 AS next FROM skill_versions WHERE skill_id = ?').get(row.skill_id).next;
       const now = Date.now();
       db.prepare(`
-        UPDATE skill_versions SET status = 'SUBMITTED', version_no = ?, summary = ?, revision = revision + 1, submitted_at = ?
+        UPDATE skill_versions SET status = 'SUBMITTED', version_no = ?, summary = ?, release_time = ?, revision = revision + 1, submitted_at = ?
         WHERE id = ? AND status = 'DRAFT'
-      `).run(versionNo, summary, now, row.id);
-      auditLog({ actorId: req.user.id, action: 'SUBMIT_VERSION', targetType: 'SKILL_VERSION', targetId: row.id, metadata: { slug: row.slug, versionNo, summary }, ip: getClientIp(req) });
+      `).run(versionNo, summary, releaseTime, now, row.id);
+      auditLog({ actorId: req.user.id, action: 'SUBMIT_VERSION', targetType: 'SKILL_VERSION', targetId: row.id, metadata: { slug: row.slug, versionNo, summary, releaseTime }, ip: getClientIp(req) });
       return { versionNo };
     })();
     if (outcome.stale) return res.status(409).json({ error: '当前已发布版本已变化，请从最新版本重新创建草稿', code: 'STALE_BASE' });
@@ -284,6 +294,32 @@ skillRouter.get('/versions', requireAuth, (req, res) => {
   sql += ' ORDER BY COALESCE(v.submitted_at, v.created_at) DESC LIMIT 200';
   const versions = getDb().prepare(sql).all(...params).map((row) => mapVersion(row));
   res.json({ versions });
+});
+
+skillRouter.get('/releases', requireAuth, (req, res, next) => {
+  try {
+    const requestedReleaseTime = req.query.releaseTime
+      ? validateReleaseTime(req.query.releaseTime)
+      : null;
+    let sql = `${VERSION_SELECT} WHERE v.status = 'APPROVED' AND v.release_time IS NOT NULL`;
+    const params = [];
+    if (requestedReleaseTime) {
+      sql += ' AND v.release_time = ?';
+      params.push(requestedReleaseTime);
+    }
+    sql += ' ORDER BY v.release_time DESC, v.reviewed_at DESC, s.slug';
+    const versions = getDb().prepare(sql).all(...params).map((row) => mapVersion(row));
+    const groups = [];
+    for (const version of versions) {
+      let group = groups.at(-1);
+      if (!group || group.releaseTime !== version.releaseTime) {
+        group = { releaseTime: version.releaseTime, versions: [] };
+        groups.push(group);
+      }
+      group.versions.push(version);
+    }
+    res.json({ groups });
+  } catch (error) { next(error); }
 });
 
 skillRouter.get('/versions/:id', requireAuth, (req, res, next) => {
@@ -318,14 +354,16 @@ skillRouter.post('/versions/:id/review', ...requireRole(ROLES.REVIEWER), (req, r
       if (row.status !== VERSION_STATUSES.SUBMITTED) return { conflict: true };
       if (row.created_by === req.user.id) return { self: true };
       const now = Date.now();
+      let finalReleaseTime = row.release_time;
       if (decision === 'APPROVE') {
+        finalReleaseTime = validateReleaseTime(req.body?.releaseTime ?? row.release_time);
         const current = db.prepare('SELECT current_published_version_id FROM skills WHERE id = ?').get(row.skill_id);
         if (current.current_published_version_id !== row.base_published_version_id) {
           db.prepare("UPDATE skill_versions SET status = 'SUPERSEDED', reviewed_at = ? WHERE id = ?").run(now, row.id);
           auditLog({ actorId: req.user.id, action: 'SUPERSEDE_STALE_VERSION', targetType: 'SKILL_VERSION', targetId: row.id, ip: getClientIp(req) });
           return { stale: true };
         }
-        db.prepare("UPDATE skill_versions SET status = 'APPROVED', reviewed_at = ? WHERE id = ?").run(now, row.id);
+        db.prepare("UPDATE skill_versions SET status = 'APPROVED', release_time = ?, reviewed_at = ? WHERE id = ?").run(finalReleaseTime, now, row.id);
         db.prepare('UPDATE skills SET current_published_version_id = ? WHERE id = ?').run(row.id, row.skill_id);
         db.prepare(`
           UPDATE skill_versions SET status = 'SUPERSEDED', reviewed_at = ?
@@ -336,7 +374,7 @@ skillRouter.post('/versions/:id/review', ...requireRole(ROLES.REVIEWER), (req, r
       }
       db.prepare('INSERT INTO reviews(version_id, reviewer_id, decision, comment, created_at) VALUES (?, ?, ?, ?, ?)')
         .run(row.id, req.user.id, decision, comment || null, now);
-      auditLog({ actorId: req.user.id, action: decision === 'APPROVE' ? 'APPROVE_VERSION' : 'REJECT_VERSION', targetType: 'SKILL_VERSION', targetId: row.id, metadata: { slug: row.slug, versionNo: row.version_no, comment }, ip: getClientIp(req) });
+      auditLog({ actorId: req.user.id, action: decision === 'APPROVE' ? 'APPROVE_VERSION' : 'REJECT_VERSION', targetType: 'SKILL_VERSION', targetId: row.id, metadata: { slug: row.slug, versionNo: row.version_no, comment, releaseTime: finalReleaseTime }, ip: getClientIp(req) });
       return { ok: true };
     })();
     if (outcome.notFound) return res.status(404).json({ error: '版本不存在' });
@@ -355,13 +393,43 @@ skillRouter.get('/exports/current.zip', requireAuth, (req, res, next) => {
       format: 'skill-control-export-v1',
       skills: rows.map((row) => {
         const files = filesForVersion(row.id);
-        return { slug: row.slug, version: row.version_no, versionId: row.id, approvedAt: row.reviewed_at, approvedBy: row.reviewer_name || '系统初始化', sha256: computeSnapshotHash(files) };
+        return { slug: row.slug, version: row.version_no, versionId: row.id, releaseTime: row.release_time, approvedAt: row.reviewed_at, approvedBy: row.reviewer_name || '系统初始化', sha256: computeSnapshotHash(files) };
       }),
     };
     const entries = rows.flatMap((row) => filesForVersion(row.id).map((file) => ({ name: `skills/${row.slug}/${file.path}`, content: file.content })));
     auditLog({ actorId: req.user.id, action: 'EXPORT_CURRENT_BUNDLE', targetType: 'EXPORT', metadata: { skills: manifest.skills.map((skill) => `${skill.slug}@v${skill.version}`) }, ip: getClientIp(req) });
     streamZip(res, `skills-published-${dateStamp()}.zip`, entries, manifest);
   } catch (error) { next(error); }
+});
+
+skillRouter.get('/exports/releases/:releaseTime.zip', requireAuth, (req, res, next) => {
+  try {
+    const releaseTime = validateReleaseTime(req.params.releaseTime);
+    const rows = getDb().prepare(`${VERSION_SELECT}
+      WHERE v.status = 'APPROVED' AND v.release_time = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM skill_versions newer
+          WHERE newer.skill_id = v.skill_id
+            AND newer.status = 'APPROVED'
+            AND newer.release_time = v.release_time
+            AND newer.version_no > v.version_no
+        )
+      ORDER BY s.slug
+    `).all(releaseTime);
+    if (!rows.length) return res.status(404).json({ error: '该投产日期下没有已批准版本' });
+    const manifest = {
+      exportedAt: new Date().toISOString(),
+      format: 'skill-control-release-export-v1',
+      releaseTime,
+      skills: rows.map((row) => {
+        const files = filesForVersion(row.id);
+        return { slug: row.slug, version: row.version_no, versionId: row.id, releaseTime, approvedAt: row.reviewed_at, approvedBy: row.reviewer_name || '系统初始化', sha256: computeSnapshotHash(files) };
+      }),
+    };
+    const entries = rows.flatMap((row) => filesForVersion(row.id).map((file) => ({ name: `skills/${row.slug}/${file.path}`, content: file.content })));
+    auditLog({ actorId: req.user.id, action: 'EXPORT_RELEASE_BUNDLE', targetType: 'EXPORT', targetId: releaseTime, metadata: { releaseTime, skills: manifest.skills.map((skill) => `${skill.slug}@v${skill.version}`) }, ip: getClientIp(req) });
+    return streamZip(res, `skills-release-${releaseTime}.zip`, entries, manifest);
+  } catch (error) { return next(error); }
 });
 
 skillRouter.get('/versions/:id/export.zip', requireAuth, (req, res, next) => {
@@ -372,7 +440,7 @@ skillRouter.get('/versions/:id/export.zip', requireAuth, (req, res, next) => {
     const manifest = {
       exportedAt: new Date().toISOString(),
       format: 'skill-control-export-v1',
-      skills: [{ slug: row.slug, version: row.version_no, versionId: row.id, approvedAt: row.reviewed_at, approvedBy: row.reviewer_name || '系统初始化', sha256: computeSnapshotHash(files) }],
+      skills: [{ slug: row.slug, version: row.version_no, versionId: row.id, releaseTime: row.release_time, approvedAt: row.reviewed_at, approvedBy: row.reviewer_name || '系统初始化', sha256: computeSnapshotHash(files) }],
     };
     const entries = files.map((file) => ({ name: `skills/${row.slug}/${file.path}`, content: file.content }));
     auditLog({ actorId: req.user.id, action: 'EXPORT_SKILL_VERSION', targetType: 'SKILL_VERSION', targetId: row.id, metadata: { slug: row.slug, versionNo: row.version_no }, ip: getClientIp(req) });

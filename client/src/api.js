@@ -31,6 +31,12 @@ export function formatTime(value) {
   }).format(new Date(value));
 }
 
+export function formatReleaseDate(value) {
+  if (!value) return '未设置';
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[1]}年${match[2]}月${match[3]}日` : String(value);
+}
+
 export const statusLabel = {
   DRAFT: '草稿',
   SUBMITTED: '待审核',

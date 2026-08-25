@@ -104,7 +104,7 @@ export default function ReleasesPage() {
         return <section className="panel release-group" key={group.releaseTime}>
         <div className="panel-heading"><div><span className="release-date-label">投产日期</span><h2>{formatReleaseDate(group.releaseTime)}</h2><p>共 {group.skills.length} 个 Skill，{group.versions.length} 个已审批版本</p></div><div className="header-actions">{user.role === 'ADMIN' && <button className="button secondary" onClick={() => openBatch(group)}>整批调整日期</button>}<a className="button secondary" href={`/api/exports/releases/${group.releaseTime}.zip`}>⇩ 下载该批次</a></div></div>
         <div className="release-skill-columns" style={{ '--release-skill-count': group.skills.length }}>
-          {group.skills.map((skill) => <div className="release-skill-heading" key={`heading-${skill.skillId}`}><Link className="skill-glyph" to={`/skills/${skill.slug}`}>{skill.slug.slice(0, 1).toUpperCase()}</Link><Link to={`/skills/${skill.slug}`}><strong>{skill.slug}</strong></Link><span>{skill.versions.length} 个版本</span></div>)}
+          {group.skills.map((skill) => <div className="release-skill-heading" key={`heading-${skill.skillId}`}><span className="skill-glyph">{skill.slug.slice(0, 1).toUpperCase()}</span><strong>{skill.slug}</strong><span className="release-skill-count">{skill.versions.length} 个版本</span></div>)}
           {Array.from({ length: maxVersions }, (_, index) => group.skills.map((skill) => {
             const version = skill.versions[index];
             if (!version) return <div className="release-skill-cell empty" key={`${skill.skillId}-${index}`} />;

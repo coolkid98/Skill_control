@@ -92,6 +92,23 @@ CREATE TABLE IF NOT EXISTS password_reset_requests (
   FOREIGN KEY (resolved_by) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS release_time_change_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  version_id TEXT NOT NULL,
+  requested_by INTEGER NOT NULL,
+  previous_release_time TEXT NOT NULL,
+  requested_release_time TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
+  reviewed_by INTEGER,
+  review_comment TEXT,
+  created_at INTEGER NOT NULL,
+  reviewed_at INTEGER,
+  FOREIGN KEY (version_id) REFERENCES skill_versions(id) ON DELETE CASCADE,
+  FOREIGN KEY (requested_by) REFERENCES users(id),
+  FOREIGN KEY (reviewed_by) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   actor_id INTEGER,
@@ -110,6 +127,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 CREATE INDEX IF NOT EXISTS idx_password_reset_status ON password_reset_requests(status, requested_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_password_reset_pending_user ON password_reset_requests(user_id) WHERE status = 'PENDING';
+CREATE INDEX IF NOT EXISTS idx_release_change_status ON release_time_change_requests(status, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_release_change_pending_version ON release_time_change_requests(version_id) WHERE status = 'PENDING';
 `;
 
 export function getDb() {
@@ -181,6 +200,31 @@ function applyMigrations() {
           );
           CREATE INDEX IF NOT EXISTS idx_password_reset_status ON password_reset_requests(status, requested_at DESC);
           CREATE UNIQUE INDEX IF NOT EXISTS idx_password_reset_pending_user ON password_reset_requests(user_id) WHERE status = 'PENDING';
+        `);
+      },
+    },
+    {
+      version: 5,
+      run() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS release_time_change_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            version_id TEXT NOT NULL,
+            requested_by INTEGER NOT NULL,
+            previous_release_time TEXT NOT NULL,
+            requested_release_time TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
+            reviewed_by INTEGER,
+            review_comment TEXT,
+            created_at INTEGER NOT NULL,
+            reviewed_at INTEGER,
+            FOREIGN KEY (version_id) REFERENCES skill_versions(id) ON DELETE CASCADE,
+            FOREIGN KEY (requested_by) REFERENCES users(id),
+            FOREIGN KEY (reviewed_by) REFERENCES users(id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_release_change_status ON release_time_change_requests(status, created_at DESC);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_release_change_pending_version ON release_time_change_requests(version_id) WHERE status = 'PENDING';
         `);
       },
     },

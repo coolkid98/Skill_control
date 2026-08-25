@@ -133,6 +133,19 @@ describe('初始化与校验', () => {
     assert.ok(getDb().prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'password_reset_requests'").get());
     assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 4').get().count, 1);
   });
+
+  test('旧数据库启动时自动创建投产日期变更申请表', () => {
+    getDb().exec('DROP TABLE release_time_change_requests');
+    getDb().prepare('DELETE FROM schema_migrations WHERE version = 5').run();
+    closeDb();
+    initDb({
+      dbPath,
+      seedDir,
+      bootstrapAdmin: { username: 'admin', password: 'AdminPass123', displayName: '测试管理员' },
+    });
+    assert.ok(getDb().prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'release_time_change_requests'").get());
+    assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 5').get().count, 1);
+  });
 });
 
 describe('认证与权限', () => {
@@ -295,6 +308,65 @@ describe('版本审批工作流', () => {
     assert.equal(batch.body.updatedCount, legacyGroup.count);
     assert.equal(getDb().prepare("SELECT COUNT(*) AS count FROM skill_versions WHERE status = 'APPROVED' AND release_time = '2026-09-04'").get().count, legacyGroup.count);
     assert.ok(getDb().prepare("SELECT id FROM audit_logs WHERE action = 'UPDATE_RELEASE_BATCH' AND target_id = ?").get(legacyGroup.release_time));
+  });
+
+  test('非管理员申请改期后，只有管理员批准才真正变更日期', async () => {
+    createUser('date-applicant', 'EDITOR');
+    createUser('second-applicant', 'REVIEWER');
+    const applicant = await login('date-applicant');
+    const secondApplicant = await login('second-applicant');
+    const admin = await login('admin', 'AdminPass123');
+    const version = getDb().prepare("SELECT id, release_time FROM skill_versions WHERE status = 'APPROVED' ORDER BY created_at LIMIT 1").get();
+
+    const created = await applicant.post(`/api/versions/${version.id}/release-time-change-requests`).send({
+      releaseTime: '2026-09-11', reason: '配合企业九月统一投产窗口',
+    });
+    assert.equal(created.status, 201, created.text);
+    assert.equal(created.body.request.status, 'PENDING');
+    assert.equal(getDb().prepare('SELECT release_time FROM skill_versions WHERE id = ?').get(version.id).release_time, version.release_time);
+
+    const duplicate = await secondApplicant.post(`/api/versions/${version.id}/release-time-change-requests`).send({
+      releaseTime: '2026-09-18', reason: '另一项改期申请',
+    });
+    assert.equal(duplicate.status, 409);
+    const adminCannotApply = await admin.post(`/api/versions/${version.id}/release-time-change-requests`).send({
+      releaseTime: '2026-09-18', reason: '管理员不走申请流程',
+    });
+    assert.equal(adminCannotApply.status, 403);
+
+    const mine = await applicant.get('/api/release-time-change-requests/mine');
+    assert.equal(mine.status, 200, mine.text);
+    assert.equal(mine.body.requests[0].requestedReleaseTime, '2026-09-11');
+    const pending = await admin.get('/api/admin/release-time-change-requests');
+    assert.equal(pending.status, 200, pending.text);
+    assert.equal(pending.body.requests.length, 1);
+
+    const approved = await admin.post(`/api/admin/release-time-change-requests/${created.body.request.id}/review`).send({ decision: 'APPROVE', comment: '同意调整' });
+    assert.equal(approved.status, 200, approved.text);
+    assert.equal(getDb().prepare('SELECT release_time FROM skill_versions WHERE id = ?').get(version.id).release_time, '2026-09-11');
+    assert.ok(getDb().prepare("SELECT id FROM audit_logs WHERE action = 'APPROVE_RELEASE_TIME_CHANGE' AND target_id = ?").get(String(created.body.request.id)));
+  });
+
+  test('管理员驳回申请不会变更日期，直接调整会自动终止待审申请', async () => {
+    createUser('reject-applicant', 'EDITOR');
+    const applicant = await login('reject-applicant');
+    const admin = await login('admin', 'AdminPass123');
+    const versions = getDb().prepare("SELECT id, release_time FROM skill_versions WHERE status = 'APPROVED' ORDER BY created_at LIMIT 2").all();
+
+    const rejectedRequest = await applicant.post(`/api/versions/${versions[0].id}/release-time-change-requests`).send({ releaseTime: '2026-09-11', reason: '申请延后投产' });
+    const missingComment = await admin.post(`/api/admin/release-time-change-requests/${rejectedRequest.body.request.id}/review`).send({ decision: 'REJECT', comment: '' });
+    assert.equal(missingComment.status, 400);
+    const rejected = await admin.post(`/api/admin/release-time-change-requests/${rejectedRequest.body.request.id}/review`).send({ decision: 'REJECT', comment: '当前窗口不允许调整' });
+    assert.equal(rejected.status, 200, rejected.text);
+    assert.equal(getDb().prepare('SELECT release_time FROM skill_versions WHERE id = ?').get(versions[0].id).release_time, versions[0].release_time);
+
+    const supersededRequest = await applicant.post(`/api/versions/${versions[1].id}/release-time-change-requests`).send({ releaseTime: '2026-09-18', reason: '申请另一个窗口' });
+    assert.equal(supersededRequest.status, 201, supersededRequest.text);
+    const direct = await admin.patch(`/api/admin/versions/${versions[1].id}/release-time`).send({ releaseTime: '2026-08-28' });
+    assert.equal(direct.status, 200, direct.text);
+    const state = getDb().prepare('SELECT status, review_comment FROM release_time_change_requests WHERE id = ?').get(supersededRequest.body.request.id);
+    assert.equal(state.status, 'REJECTED');
+    assert.match(state.review_comment, /管理员已直接调整/);
   });
 
   test('非周五日期不能保存或提交', async () => {

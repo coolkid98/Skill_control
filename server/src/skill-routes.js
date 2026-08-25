@@ -54,6 +54,23 @@ function mapVersion(row, includeFiles = false) {
   return result;
 }
 
+function mapReleaseTimeChangeRequest(row) {
+  return {
+    id: row.id,
+    versionId: row.version_id,
+    slug: row.slug,
+    versionNo: row.version_no,
+    previousReleaseTime: row.previous_release_time,
+    requestedReleaseTime: row.requested_release_time,
+    reason: row.reason,
+    status: row.status,
+    requesterName: row.requester_name || row.requester_username,
+    reviewComment: row.review_comment,
+    createdAt: row.created_at,
+    reviewedAt: row.reviewed_at,
+  };
+}
+
 const VERSION_SELECT = `
   SELECT v.*, s.slug, s.current_published_version_id,
          creator.username AS creator_username, creator.display_name AS creator_name,
@@ -294,6 +311,64 @@ skillRouter.get('/versions', requireAuth, (req, res) => {
   sql += ' ORDER BY COALESCE(v.submitted_at, v.created_at) DESC LIMIT 200';
   const versions = getDb().prepare(sql).all(...params).map((row) => mapVersion(row));
   res.json({ versions });
+});
+
+skillRouter.get('/release-time-change-requests/mine', ...requireRole(ROLES.EDITOR, ROLES.REVIEWER), (req, res) => {
+  const requests = getDb().prepare(`
+    SELECT c.*, v.version_no, s.slug,
+           requester.username AS requester_username, requester.display_name AS requester_name
+    FROM release_time_change_requests c
+    JOIN skill_versions v ON v.id = c.version_id
+    JOIN skills s ON s.id = v.skill_id
+    JOIN users requester ON requester.id = c.requested_by
+    WHERE c.requested_by = ?
+    ORDER BY c.created_at DESC LIMIT 200
+  `).all(req.user.id).map(mapReleaseTimeChangeRequest);
+  res.json({ requests });
+});
+
+skillRouter.post('/versions/:id/release-time-change-requests', ...requireRole(ROLES.EDITOR, ROLES.REVIEWER), (req, res, next) => {
+  try {
+    const requestedReleaseTime = validateReleaseTime(req.body?.releaseTime);
+    const reason = String(req.body?.reason || '').trim();
+    if (reason.length < 2 || reason.length > 500) return res.status(400).json({ error: '请填写 2-500 字的改期原因' });
+    const db = getDb();
+    const version = getVersion(req.params.id);
+    if (!version) return res.status(404).json({ error: '版本不存在' });
+    if (version.status !== VERSION_STATUSES.APPROVED) return res.status(409).json({ error: '只能申请调整已批准版本的投产日期' });
+    if (!version.release_time) return res.status(409).json({ error: '该版本尚未设置投产日期' });
+    if (version.release_time === requestedReleaseTime) return res.status(400).json({ error: '新投产日期不能与当前日期相同' });
+    const existing = db.prepare("SELECT id FROM release_time_change_requests WHERE version_id = ? AND status = 'PENDING'").get(version.id);
+    if (existing) return res.status(409).json({ error: '该版本已经有一个待审批的改期申请' });
+    const now = Date.now();
+    const result = db.transaction(() => {
+      const inserted = db.prepare(`
+        INSERT INTO release_time_change_requests(
+          version_id, requested_by, previous_release_time, requested_release_time,
+          reason, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+      `).run(version.id, req.user.id, version.release_time, requestedReleaseTime, reason, now);
+      auditLog({
+        actorId: req.user.id,
+        action: 'REQUEST_RELEASE_TIME_CHANGE',
+        targetType: 'SKILL_VERSION',
+        targetId: version.id,
+        metadata: { slug: version.slug, versionNo: version.version_no, previousReleaseTime: version.release_time, requestedReleaseTime, reason },
+        ip: getClientIp(req),
+      });
+      return Number(inserted.lastInsertRowid);
+    })();
+    const row = db.prepare(`
+      SELECT c.*, v.version_no, s.slug,
+             requester.username AS requester_username, requester.display_name AS requester_name
+      FROM release_time_change_requests c
+      JOIN skill_versions v ON v.id = c.version_id
+      JOIN skills s ON s.id = v.skill_id
+      JOIN users requester ON requester.id = c.requested_by
+      WHERE c.id = ?
+    `).get(result);
+    return res.status(201).json({ request: mapReleaseTimeChangeRequest(row) });
+  } catch (error) { return next(error); }
 });
 
 skillRouter.get('/releases', requireAuth, (req, res, next) => {

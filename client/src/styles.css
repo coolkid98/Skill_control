@@ -239,12 +239,14 @@ td select { width: 110px; height: 32px; font-size: 11px; }
 .release-date-label { display: block; margin-bottom: 4px; color: #079382; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
 .release-version-list { padding: 3px 0; }
 .release-version-row { display: grid; grid-template-columns: auto minmax(230px, 1fr) 150px 180px; align-items: center; gap: 15px; padding: 15px 23px; border-bottom: 1px solid #edf0f3; transition: .15s; }
-.release-version-row.admin-row { grid-template-columns: auto minmax(230px, 1fr) 150px 180px auto; }
+.release-version-row.admin-row, .release-version-row.request-row { grid-template-columns: auto minmax(230px, 1fr) 150px 180px auto; }
 .release-version-row:last-child { border-bottom: 0; }
 .release-version-row:hover { background: #f8fafb; }
 .release-version-row div p { margin: 3px 0 0; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.release-version-row > span:not(.skill-glyph), .release-version-row time { color: #8992a0; font-size: 11px; }
+.release-version-row > span:not(.skill-glyph):not(.status), .release-version-row time { color: #8992a0; font-size: 11px; }
 .release-version-row time { text-align: right; }
+.release-request-panel { margin-bottom: 20px; border-color: #efd99c; }
+.inline-actions { display: flex; gap: 7px; }
 
 .login-page { min-height: 100vh; display: grid; grid-template-columns: minmax(420px, 1.1fr) minmax(400px, .9fr); color: #fff; background: #0b1220; }
 .login-visual { position: relative; display: grid; place-items: center; overflow: hidden; min-height: 100vh; background: radial-gradient(circle at 22% 28%, #183b43, #0b1220 48%); }
@@ -280,7 +282,7 @@ td select { width: 110px; height: 32px; font-size: 11px; }
   .review-meta { grid-template-columns: repeat(2, 1fr); gap: 15px 0; }
   .review-meta div:nth-child(even) { border-right: 0; }
   .release-version-row { grid-template-columns: auto minmax(220px, 1fr) 150px; }
-  .release-version-row.admin-row { grid-template-columns: auto minmax(220px, 1fr) 150px auto; }
+  .release-version-row.admin-row, .release-version-row.request-row { grid-template-columns: auto minmax(220px, 1fr) 150px auto; }
   .release-version-row time { display: none; }
 }
 
@@ -317,6 +319,6 @@ td select { width: 110px; height: 32px; font-size: 11px; }
   .editor-footer .editor-release-field { width: 100%; flex-basis: auto; }
   .form-grid { grid-template-columns: 1fr; }
   .release-version-row { grid-template-columns: auto 1fr; }
-  .release-version-row.admin-row { grid-template-columns: auto 1fr auto; }
-  .release-version-row > span:not(.skill-glyph) { display: none; }
+  .release-version-row.admin-row, .release-version-row.request-row { grid-template-columns: auto 1fr auto; }
+  .release-version-row > span:not(.skill-glyph):not(.status) { display: none; }
 }

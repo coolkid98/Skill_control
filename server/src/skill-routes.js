@@ -108,16 +108,33 @@ skillRouter.get('/dashboard', requireAuth, (req, res) => {
     myDrafts: db.prepare("SELECT COUNT(*) AS count FROM skill_versions WHERE status = 'DRAFT' AND created_by = ?").get(req.user.id).count,
     approvedVersions: db.prepare("SELECT COUNT(*) AS count FROM skill_versions WHERE status = 'APPROVED'").get().count,
   };
-  const recent = db.prepare(`${VERSION_SELECT}
+  const recentRows = db.prepare(`${VERSION_SELECT}
     WHERE v.status != 'DRAFT' OR v.created_by = ?
-    ORDER BY COALESCE(v.reviewed_at, v.submitted_at, v.created_at) DESC LIMIT 8
-  `).all(req.user.id).map((row) => mapVersion(row));
-  res.json({ stats, recent });
+    ORDER BY COALESCE(v.reviewed_at, v.submitted_at, v.created_at) DESC
+  `).all(req.user.id);
+  const allRecent = recentRows.map((row) => mapVersion(row));
+  const recent = allRecent.slice(0, 8);
+  const windowKeys = [...new Set(allRecent.map((version) => version.releaseTime).filter(Boolean))]
+    .sort((left, right) => right.localeCompare(left))
+    .slice(0, 3);
+  const selectedWindows = new Set(windowKeys);
+  const groupedWindows = new Map();
+  for (const version of allRecent) {
+    if (version.releaseTime && !selectedWindows.has(version.releaseTime)) continue;
+    const key = version.releaseTime || null;
+    const group = groupedWindows.get(key) || { releaseTime: key, versions: [] };
+    group.versions.push(version);
+    groupedWindows.set(key, group);
+  }
+  const recentGroups = windowKeys.map((releaseTime) => groupedWindows.get(releaseTime));
+  if (groupedWindows.has(null)) recentGroups.push(groupedWindows.get(null));
+  res.json({ stats, recent, recentGroups });
 });
 
 skillRouter.get('/skills', requireAuth, (req, res) => {
   const search = String(req.query.search || '').trim();
-  const rows = getDb().prepare(`
+  const db = getDb();
+  const rows = db.prepare(`
     SELECT s.id, s.slug, s.current_published_version_id, s.created_at,
            pub.version_no AS current_version_no, pub.reviewed_at AS published_at,
            pub.release_time,
@@ -128,6 +145,16 @@ skillRouter.get('/skills', requireAuth, (req, res) => {
     WHERE (? = '' OR s.slug LIKE '%' || ? || '%')
     ORDER BY s.slug
   `).all(req.user.id, search, search);
+  const recentRows = db.prepare(`${VERSION_SELECT}
+    WHERE v.status = 'APPROVED' AND v.release_time IS NOT NULL
+    ORDER BY v.release_time DESC, v.version_no DESC, v.reviewed_at DESC
+  `).all();
+  const recentBySkill = new Map();
+  for (const row of recentRows) {
+    const windows = recentBySkill.get(row.skill_id) || new Map();
+    if (!windows.has(row.release_time) && windows.size < 3) windows.set(row.release_time, mapVersion(row));
+    recentBySkill.set(row.skill_id, windows);
+  }
   const skills = rows.map((row) => ({
     id: row.id,
     slug: row.slug,
@@ -139,6 +166,7 @@ skillRouter.get('/skills', requireAuth, (req, res) => {
     myDraftId: row.my_draft_id,
     description: extractDescription(row.skill_content),
     createdAt: row.created_at,
+    recentReleaseVersions: [...(recentBySkill.get(row.id)?.values() || [])],
   }));
   res.json({ skills });
 });

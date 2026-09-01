@@ -103,6 +103,30 @@ sudo bash scripts/configure-nginx.sh skill.mythought.cn 3002
 
 运行前需确保域名的 A 记录已经指向 ECS 公网 IP、Skill Control 容器正在目标端口运行。运行后在阿里云安全组开放 TCP 80，即可通过 HTTP 域名访问。正式使用前还应配置 HTTPS，并把 `.env` 中的 `COOKIE_SECURE` 改为 `true`。
 
+### 4. 一键配置 HTTPS
+
+确认 HTTP 域名已经可以正常访问，并在阿里云安全组开放 TCP 443 后，运行：
+
+```bash
+sudo bash scripts/configure-https.sh 你的证书通知邮箱
+```
+
+例如：
+
+```bash
+sudo bash scripts/configure-https.sh admin@example.com
+```
+
+默认域名是 `www.mythought.cn`。也可以显式指定其他已经完成 DNS 和 Nginx 配置的域名：
+
+```bash
+sudo bash scripts/configure-https.sh admin@example.com skill.mythought.cn
+```
+
+如果省略邮箱参数，脚本会交互提示输入。脚本会自动安装 Certbot、备份 Nginx 和 `.env`、申请并部署 Let's Encrypt 证书、启用 HTTP 跳转 HTTPS、设置 `COOKIE_SECURE=true`、重建 Skill Control 容器、检查 HTTPS 健康状态并测试自动续期。证书申请失败时会恢复原 Nginx 配置；容器重建失败时会恢复原 `.env`。
+
+HTTPS 配置完成后继续保留 TCP 80，用于 HTTP 自动跳转及证书续期验证；正式入口为 `https://你的域名`。不要再次运行 HTTP 配置脚本，脚本会检测到已有 443 配置并停止，避免覆盖证书。
+
 国内构建使用 DaoCloud Node 基础镜像、阿里云 Debian 软件源和 npmmirror npm 源，与参考项目的部署方式一致。
 `better-sqlite3` 在独立的 Docker 构建阶段安装 Python、make 和 g++ 完成原生编译；最终运行镜像只复制编译产物，不包含这些编译工具。
 

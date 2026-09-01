@@ -84,6 +84,25 @@ docker compose logs -f
 
 默认访问 `http://ECS公网IP:3002`。在阿里云安全组开放配置的 `APP_PORT`。若使用域名和 HTTPS，请由 Nginx/Caddy 反向代理至该端口，并将 `COOKIE_SECURE=true`；反向代理必须传递 `X-Forwarded-For` 和 `X-Forwarded-Proto`。
 
+### 3. 一键配置 Nginx 域名转发
+
+项目提供了可重复执行的 Nginx 配置脚本。默认将 `www.mythought.cn` 转发到本机 `3002` 端口：
+
+```bash
+sudo bash scripts/configure-nginx.sh
+```
+
+也可以显式指定域名和端口：
+
+```bash
+sudo bash scripts/configure-nginx.sh www.mythought.cn 3002
+sudo bash scripts/configure-nginx.sh skill.mythought.cn 3002
+```
+
+脚本会自动安装 Nginx（如尚未安装）、生成并启用站点配置、运行 `nginx -t`、重载服务，并检查应用端口和反向代理的健康状态。覆盖已有的 Skill Control HTTP 配置前会自动创建带时间戳的备份；配置校验失败时会恢复原配置。如果现有配置已经包含 HTTPS 监听，脚本会停止，避免覆盖证书设置。
+
+运行前需确保域名的 A 记录已经指向 ECS 公网 IP、Skill Control 容器正在目标端口运行。运行后在阿里云安全组开放 TCP 80，即可通过 HTTP 域名访问。正式使用前还应配置 HTTPS，并把 `.env` 中的 `COOKIE_SECURE` 改为 `true`。
+
 国内构建使用 DaoCloud Node 基础镜像、阿里云 Debian 软件源和 npmmirror npm 源，与参考项目的部署方式一致。
 `better-sqlite3` 在独立的 Docker 构建阶段安装 Python、make 和 g++ 完成原生编译；最终运行镜像只复制编译产物，不包含这些编译工具。
 

@@ -136,6 +136,10 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .markdown-body pre code { padding: 0; background: transparent; }
 .markdown-body table { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; }
 .markdown-body th, .markdown-body td { padding: 6px 10px; border: 1px solid #dfe4ea; }
+.tool-file-input { display: none; }
+.tool-catalog-panel { overflow: hidden; }
+.tool-document-size { flex: none; color: #8b94a2; font-size: 11px; }
+.tool-catalog-content { min-height: 420px; padding: 30px 36px 48px; overflow-x: auto; }
 .version-list { padding: 19px 20px; }
 .version-row { display: grid; grid-template-columns: 22px 1fr; }
 .version-line { position: relative; border-left: 1px solid #dce2e7; }
@@ -341,6 +345,7 @@ td select { width: 110px; height: 32px; font-size: 11px; }
   .editor-footer { align-items: stretch; flex-direction: column; }
   .editor-footer .editor-release-field { width: 100%; flex-basis: auto; }
   .form-grid { grid-template-columns: 1fr; }
+  .tool-catalog-content { min-height: 320px; padding: 22px 19px 35px; }
   .release-version-row { grid-template-columns: auto 1fr; }
   .release-version-row.admin-row, .release-version-row.request-row { grid-template-columns: auto 1fr auto; }
   .release-version-row > span:not(.skill-glyph):not(.status) { display: none; }

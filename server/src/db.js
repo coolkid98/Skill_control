@@ -109,6 +109,17 @@ CREATE TABLE IF NOT EXISTS release_time_change_requests (
   FOREIGN KEY (reviewed_by) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS tool_documents (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  filename TEXT NOT NULL,
+  content TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  uploaded_by INTEGER NOT NULL,
+  uploaded_at INTEGER NOT NULL,
+  FOREIGN KEY (uploaded_by) REFERENCES users(id)
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   actor_id INTEGER,
@@ -225,6 +236,23 @@ function applyMigrations() {
           );
           CREATE INDEX IF NOT EXISTS idx_release_change_status ON release_time_change_requests(status, created_at DESC);
           CREATE UNIQUE INDEX IF NOT EXISTS idx_release_change_pending_version ON release_time_change_requests(version_id) WHERE status = 'PENDING';
+        `);
+      },
+    },
+    {
+      version: 6,
+      run() {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS tool_documents (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            filename TEXT NOT NULL,
+            content TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            uploaded_by INTEGER NOT NULL,
+            uploaded_at INTEGER NOT NULL,
+            FOREIGN KEY (uploaded_by) REFERENCES users(id)
+          );
         `);
       },
     },

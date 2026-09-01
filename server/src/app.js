@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import { authRouter } from './auth.js';
 import { adminRouter } from './admin-routes.js';
 import { skillRouter } from './skill-routes.js';
+import { toolRouter } from './tool-routes.js';
 import { config } from './config.js';
 import { errorHandler, notFound } from './http.js';
 
@@ -30,6 +31,7 @@ export function createApp() {
   app.use('/api/auth', authRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api', skillRouter);
+  app.use('/api', toolRouter);
 
   if (config.isProduction) {
     const distPath = path.resolve(__dirname, '../../client/dist');

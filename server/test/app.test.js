@@ -146,6 +146,19 @@ describe('初始化与校验', () => {
     assert.ok(getDb().prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'release_time_change_requests'").get());
     assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 5').get().count, 1);
   });
+
+  test('旧数据库启动时自动创建 Tool 清单表', () => {
+    getDb().exec('DROP TABLE tool_documents');
+    getDb().prepare('DELETE FROM schema_migrations WHERE version = 6').run();
+    closeDb();
+    initDb({
+      dbPath,
+      seedDir,
+      bootstrapAdmin: { username: 'admin', password: 'AdminPass123', displayName: '测试管理员' },
+    });
+    assert.ok(getDb().prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tool_documents'").get());
+    assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 6').get().count, 1);
+  });
 });
 
 describe('认证与权限', () => {
@@ -208,6 +221,49 @@ describe('认证与权限', () => {
     const relogin = await request.agent(app).post('/api/auth/login').send({ username: 'forgot-user', password: 'ResetPass123' });
     assert.equal(relogin.status, 200);
     assert.equal(relogin.body.user.mustChangePassword, true);
+  });
+
+  test('所有登录用户可查看 Tool 清单且只有用户名为 Chent 的用户可上传', async () => {
+    createUser('Chent', 'REVIEWER');
+    createUser('tool-viewer', 'EDITOR');
+    const chent = await login('Chent');
+    const viewer = await login('tool-viewer');
+    const admin = await login('admin', 'AdminPass123');
+
+    assert.equal((await request(app).get('/api/tool-catalog')).status, 401);
+    const empty = await viewer.get('/api/tool-catalog');
+    assert.equal(empty.status, 200, empty.text);
+    assert.equal(empty.body.document, null);
+    assert.equal(empty.body.canUpload, false);
+
+    const denied = await admin.put('/api/tool-catalog').send({ filename: 'tools.md', content: '# Tools' });
+    assert.equal(denied.status, 403);
+    const badFile = await chent.put('/api/tool-catalog').send({ filename: '../tools.md', content: '# Tools' });
+    assert.equal(badFile.status, 400);
+    const wrongExtension = await chent.put('/api/tool-catalog').send({ filename: 'tools.txt', content: '# Tools' });
+    assert.equal(wrongExtension.status, 400);
+    const tooLarge = await chent.put('/api/tool-catalog').send({ filename: 'tools.md', content: 'x'.repeat(1024 * 1024 + 1) });
+    assert.equal(tooLarge.status, 413);
+
+    const uploaded = await chent.put('/api/tool-catalog').send({
+      filename: 'tool-list.md',
+      content: '# Tool 清单\n\n| 名称 | 用途 |\n| --- | --- |\n| search | 查询 |',
+    });
+    assert.equal(uploaded.status, 200, uploaded.text);
+    assert.equal(uploaded.body.canUpload, true);
+    assert.equal(uploaded.body.document.filename, 'tool-list.md');
+    assert.match(uploaded.body.document.content, /Tool 清单/);
+
+    const visible = await viewer.get('/api/tool-catalog');
+    assert.equal(visible.status, 200, visible.text);
+    assert.equal(visible.body.document.filename, 'tool-list.md');
+    assert.equal(visible.body.canUpload, false);
+
+    const replaced = await chent.put('/api/tool-catalog').send({ filename: 'tools-v2.MD', content: '# 第二版' });
+    assert.equal(replaced.status, 200, replaced.text);
+    assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM tool_documents').get().count, 1);
+    assert.equal(getDb().prepare('SELECT filename FROM tool_documents WHERE id = 1').get().filename, 'tools-v2.MD');
+    assert.equal(getDb().prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'UPLOAD_TOOL_CATALOG'").get().count, 2);
   });
 });
 

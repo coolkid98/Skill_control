@@ -38,6 +38,7 @@ export function Layout() {
         <nav onClick={() => setOpen(false)}>
           <NavItem to="/" icon="◫" label="工作台" end />
           <NavItem to="/skills" icon="◇" label="Skill 管理" />
+          <NavItem to="/tools" icon="▤" label="Tool 清单" />
           <NavItem to="/releases" icon="▦" label="投产管理" />
           {user.role === 'REVIEWER' && <NavItem to="/reviews" icon="✓" label="审批待办" />}
           {user.role === 'ADMIN' && <NavItem to="/users" icon="♙" label="用户管理" />}

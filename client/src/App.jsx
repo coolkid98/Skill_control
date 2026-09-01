@@ -8,6 +8,7 @@ const ChangePasswordPage = lazy(() => import('./pages/ChangePasswordPage.jsx'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage.jsx'));
 const SkillsPage = lazy(() => import('./pages/SkillsPage.jsx'));
 const ReleasesPage = lazy(() => import('./pages/ReleasesPage.jsx'));
+const ToolCatalogPage = lazy(() => import('./pages/ToolCatalogPage.jsx'));
 const SkillDetailPage = lazy(() => import('./pages/SkillDetailPage.jsx'));
 const EditorPage = lazy(() => import('./pages/EditorPage.jsx'));
 const ReviewsPage = lazy(() => import('./pages/ReviewsPage.jsx'));
@@ -26,6 +27,7 @@ export default function App() {
             <Route index element={<DashboardPage />} />
             <Route path="skills" element={<SkillsPage />} />
             <Route path="releases" element={<ReleasesPage />} />
+            <Route path="tools" element={<ToolCatalogPage />} />
             <Route path="skills/:slug" element={<SkillDetailPage />} />
             <Route element={<RoleRoute roles={['EDITOR']} />}>
               <Route path="drafts/:id" element={<EditorPage />} />
